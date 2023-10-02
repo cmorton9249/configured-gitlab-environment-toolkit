@@ -1,0 +1,34 @@
+# Node
+- job_name: omnibus_node
+  static_configs:
+    - targets:
+{% for ip in (praefect_int_addrs + gitaly_int_addrs + pgbouncer_int_addrs + postgres_int_addrs + redis_int_addrs + redis_cache_int_addrs + redis_persistent_int_addrs + [praefect_postgres_int_addr]) if ip != '' %}
+      - "{{ ip }}:9100"
+{% endfor %}
+{% if 'postgres' in groups %}
+# Postgres
+- job_name: postgres
+  static_configs:
+    - targets:
+{% for ip in (postgres_int_addrs + [praefect_postgres_int_addr]) if ip != '' %}
+      - "{{ ip }}:9187"
+{% endfor %}
+{% endif %}
+{% if groups | select('match', 'redis.*') | length > 0 %}
+# Redis
+- job_name: redis
+  static_configs:
+    - targets:
+{% for ip in (redis_int_addrs + redis_cache_int_addrs + redis_persistent_int_addrs) if ip != '' %}
+      - "{{ ip }}:9121"
+{% endfor %}
+{% endif %}
+{% if 'gitaly' in groups %}
+# Gitaly
+- job_name: gitaly
+  static_configs:
+    - targets:
+{% for ip in gitaly_int_addrs %}
+      - "{{ ip }}:9236"
+{% endfor %}
+{% endif %}

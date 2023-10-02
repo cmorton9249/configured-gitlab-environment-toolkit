@@ -1,0 +1,56 @@
+- name: Stop puma/sidekiq for single node
+  block:
+    - name: Secondary Database - Run gitlab-ctl stop puma
+      command: gitlab-ctl stop puma
+
+    - name: Secondary Database - Run gitlab-ctl stop sidekiq
+      command: gitlab-ctl stop sidekiq
+  when: ('gitlab_rails' in group_names and geo_secondary_site_group_name + '_postgres_primary' not in groups)
+
+- name: Secondary Database - Copy psql certificate
+  copy:
+    src: "{{ geo_psql_temp_folder.path }}/server.crt"
+    dest: /tmp/
+    mode: "0400"
+
+- name: Secondary Database - Install certificate
+  command: |
+    install -D \
+            -o gitlab-psql \
+            -g gitlab-psql \
+            -m 0400 \
+            -T /tmp/server.crt ~gitlab-psql/.postgresql/root.crt
+
+- name: Secondary database - Add new config
+  template:
+    src: templates/secondary-database.rb.j2
+    dest: /etc/gitlab/gitlab.geo.secondary-database.rb
+
+- name: Secondary database - Remove existing cluster information for Patroni
+  import_tasks: secondary-database-patroni-workaround.yml
+  when:
+    - ('postgres' in group_names)
+    - geo_run_patroni_workaround
+
+- name: Secondary Database - Run gitlab-ctl reconfigure
+  command: gitlab-ctl reconfigure
+
+- name: Secondary Database - Restart Postgres
+  command: gitlab-ctl restart
+
+# Required when non-HA database without Patroni is being used on secondary environment
+- name: Secondary Database - Replicate geo database
+  expect:
+    command: |
+      gitlab-ctl replicate-geo-database \
+        --slot-name={{ 'geo_secondary' if geo_primary_is_multi_node else inventory_hostname | regex_replace("-", "_") }} \
+        --host={{ internal_lb_host if geo_primary_is_multi_node else geo_primary_site_postgres_int_ip }} \
+        --sslmode=verify-ca \
+        --force \
+        --skip-backup
+    responses:
+      (.*)Confirmation: "replicate"
+      (.*)Enter the password for gitlab_replicator@(.*): "{{ postgres_password }}"
+    timeout: 300
+  when:
+    - (not geo_secondary_is_multi_node)

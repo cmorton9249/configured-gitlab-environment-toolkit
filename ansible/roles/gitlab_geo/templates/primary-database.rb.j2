@@ -1,0 +1,19 @@
+postgresql['sql_replication_password'] = "{{ geo_sql_replication_password_md5 }}"
+{% if geo_primary_is_multi_node %}
+patroni['replication_slots'] = {
+    'geo_secondary' => { 'type' => 'physical' }
+}
+patroni['postgresql']['max_replication_slots'] = {{ geo_max_replication_slots }}
+patroni['replication_password'] = '{{ geo_sql_replication_password }}'
+
+{% if patroni_password is defined %}
+patroni['username'] = 'patroni-api'
+patroni['password'] = '{{ patroni_password }}'
+{% endif %}
+{% else %}
+gitlab_rails['db_password'] = "{{ postgres_password }}"
+
+postgresql['sql_user_password'] = "{{ (postgres_password + 'gitlab') | md5 }}"
+postgresql['listen_address'] = "{{ geo_primary_site_postgres_int_ip }}"
+postgresql['max_replication_slots'] = {{ geo_max_replication_slots }}
+{% endif %}

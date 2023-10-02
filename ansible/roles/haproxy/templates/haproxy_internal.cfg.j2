@@ -1,0 +1,83 @@
+{% if 'gitlab_rails' in groups %}
+frontend internal-gitlab-rails-tcp-in
+    bind *:80
+    mode tcp
+    option tcplog
+    option clitcpka
+
+    default_backend gitlab-rails
+{% endif %}
+
+{% if 'pgbouncer' in groups %}
+frontend internal-pgbouncer-tcp-in
+    bind *:6432
+    mode tcp
+    option tcplog
+    option clitcpka
+
+    default_backend pgbouncer
+{% endif %}
+
+{% if 'praefect' in groups %}
+frontend internal-praefect-tcp-in
+    bind *:{{ praefect_ssl_port if praefect_ssl else '2305' }}
+    mode tcp
+    option tcplog
+    option clitcpka
+
+    default_backend praefect
+{% endif %}
+
+{% if 'postgres' in groups %}
+frontend internal-patroni-leader
+    bind *:5432
+    mode tcp
+    option tcplog
+    option clitcpka
+
+    default_backend patroni-leader
+{% endif %}
+
+{% if 'gitlab_rails' in groups %}
+backend gitlab-rails
+    mode tcp
+    option tcp-check
+    option srvtcpka
+
+{% for ip in gitlab_rails_int_addrs %}
+    server gitlab-rails{{loop.index}} {{ ip }}:80 check inter 3s fall 1
+{% endfor %}
+{% endif %}
+
+{% if 'pgbouncer' in groups %}
+backend pgbouncer
+    mode tcp
+    option tcp-check
+    option srvtcpka
+
+{% for ip in pgbouncer_int_addrs %}
+    server pgbouncer{{loop.index}} {{ ip }}:6432 check inter 3s fall 1
+{% endfor %}
+{% endif %}
+
+{% if 'praefect' in groups %}
+backend praefect
+    mode tcp
+    option tcp-check
+    option srvtcpka
+
+{% for ip in praefect_int_addrs %}
+    server praefect{{loop.index}} {{ ip }}:{{ praefect_ssl_port if praefect_ssl else '2305' }} check inter 3s fall 1
+{% endfor %}
+{% endif %}
+
+{% if 'postgres' in groups %}
+backend patroni-leader
+    mode tcp
+    option httpchk
+    http-check expect status 200
+
+{% for ip in postgres_int_addrs %}
+    server postgresql{{loop.index}} {{ ip }}:5432 maxconn 100 check port 8008 inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+{% endfor %}
+{% endif -%}

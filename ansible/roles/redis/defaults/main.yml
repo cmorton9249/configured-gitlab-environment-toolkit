@@ -1,0 +1,3 @@
+---
+
+redis_group_name: "{{ group_names | select('match', 'redis.*') | reject('match', '.*_primary|.*_secondary') | first }}"

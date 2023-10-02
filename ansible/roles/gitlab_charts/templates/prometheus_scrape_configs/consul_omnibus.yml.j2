@@ -1,0 +1,29 @@
+- job_name: node
+  consul_sd_configs:
+    - server: "gitlab-consul.{{ consul_charts_namespace }}.svc.cluster.local:8500"
+      services:
+        - node-exporter
+{% if 'postgres' in groups %}
+# Postgres
+- job_name: postgres
+  consul_sd_configs:
+    - server: "gitlab-consul.{{ consul_charts_namespace }}.svc.cluster.local:8500"
+      services:
+        - postgres-exporter
+{% endif %}
+{% if groups | select('match', 'redis.*') | length > 0 %}
+# Redis
+- job_name: redis
+  consul_sd_configs:
+    - server: "gitlab-consul.{{ consul_charts_namespace }}.svc.cluster.local:8500"
+      services:
+        - redis-exporter
+{% endif %}
+{% if 'gitaly' in groups %}
+# Gitaly
+- job_name: gitaly
+  consul_sd_configs:
+    - server: "gitlab-consul.{{ consul_charts_namespace }}.svc.cluster.local:8500"
+      services:
+        - gitaly
+{% endif %}

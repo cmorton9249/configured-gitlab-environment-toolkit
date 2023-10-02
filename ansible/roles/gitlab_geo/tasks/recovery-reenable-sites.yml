@@ -1,0 +1,66 @@
+- name: Enable Primary Site Omnibus nodes
+  block:
+    - name: Recovery Enable Sites - Enable GitLab service
+      service:
+        name: gitlab-runsvdir
+        enabled: true
+
+    - name: Recovery Enable Sites - Start Primary Site
+      command: gitlab-ctl start
+  when:
+    - omnibus_node
+    - (site_group_name in group_names)
+
+- name: Enable Primary Site for Cloud Native Hybrid environments
+  block:
+    - name: Recovery Enable Sites - Gather Gitaly group facts
+      setup:
+        filter: ansible_processor_vcpus
+      register: result
+      retries: 3
+      delay: 2
+      until: result is success
+      delegate_to: "{{ node }}"
+      delegate_facts: true
+      with_items: "{{ groups['gitaly'] }}"
+      loop_control:
+        loop_var: node
+
+    - name: Recovery Enable Sites - Get Gitaly CPU count
+      set_fact:
+        gitaly_cpus: "{{ groups['gitaly'] | sort | map('extract', hostvars, ['ansible_processor_vcpus']) | list | sum }}"
+
+    - name: Recovery Enable Sites - Set Pod Counts
+      set_fact:
+        # Calculate maximum pod count by matching Gitaly CPU count to RA sizes or best effort if no matches
+        webservice_replicas: "{{ webservice_default_replica_counts[gitaly_cpus] | default((gitaly_cpus | int / 2.4) | round | int, 'true') }}"
+        sidekiq_replicas: "{{ sidekiq_default_replica_counts[gitaly_cpus] | default(14 if gitaly_cpus | int >= 48 else (8 if gitaly_cpus | int >= 12 else 2), 'true') }}"
+
+    - name: Recovery Enable Sites - Configure kubeconfig credentials for Geo primary site
+      become: false
+      delegate_to: localhost
+      run_once: true
+      import_tasks: kubeconfig.yml
+
+    - name: Recovery Enable Sites - Enable Webservice pods
+      become: false
+      delegate_to: localhost
+      run_once: true
+      kubernetes.core.k8s_scale:
+        name: gitlab-webservice-default
+        kind: Deployment
+        namespace: "{{ gitlab_charts_release_namespace }}"
+        replicas: "{{ webservice_replicas }}"
+        wait_timeout: 300
+
+    - name: Recovery Enable Sites - Enable Sidekiq pods
+      become: false
+      delegate_to: localhost
+      run_once: true
+      kubernetes.core.k8s_scale:
+        name: gitlab-sidekiq-all-in-1-v2
+        kind: Deployment
+        namespace: "{{ gitlab_charts_release_namespace }}"
+        replicas: "{{ sidekiq_replicas }}"
+        wait_timeout: 300
+  when: cloud_native_hybrid_geo

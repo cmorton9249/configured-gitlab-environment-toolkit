@@ -1,0 +1,127 @@
+all:
+  children:
+    consul:
+      hosts:
+        gitlab-consul-1:
+          ansible_host: <CONSUL-1-ADDRESS>
+        gitlab-consul-2:
+          ansible_host: <CONSUL-2-ADDRESS>
+        gitlab-consul-3:
+          ansible_host: <CONSUL-3-ADDRESS>
+    gitaly:
+      children:
+        gitaly_primary:
+          hosts:
+            gitlab-gitaly-1:
+              ansible_host: <GITALY-1-ADDRESS>
+        gitaly_secondary:
+          hosts:
+            gitlab-gitaly-2:
+              ansible_host: <GITALY-2-ADDRESS>
+            gitlab-gitaly-3:
+              ansible_host: <GITALY-3-ADDRESS>
+    gitlab_nfs:
+      hosts:
+        gitlab-nfs-1:
+          ansible_host: <GITLAB-NFS-1-ADDRESS>
+    gitlab_rails:
+      children:
+        gitlab_rails_primary:
+          hosts:
+            gitlab-rails-1:
+              ansible_host: <GITLAB-RAILS-1-ADDRESS>
+        gitlab_rails_secondary:
+          hosts:
+            gitlab-rails-2:
+              ansible_host: <GITLAB-RAILS-2-ADDRESS>
+            gitlab-rails-3:
+              ansible_host: <GITLAB-RAILS-3-ADDRESS>
+    haproxy_external:
+      hosts:
+        gitlab-haproxy-external-1:
+          ansible_host: <HAPROXY-EXTERNAL-1-ADDRESS>
+    haproxy_internal:
+      hosts:
+        gitlab-haproxy-internal-1:
+          ansible_host: <HAPROXY-INTERNAL-1-ADDRESS>
+    monitor:
+      hosts:
+        gitlab-monitor-1:
+          ansible_host: <MONITOR-1-ADDRESS>
+    pgbouncer:
+      hosts:
+        gitlab-pgbouncer-1:
+          ansible_host: <PGBOUNCER-1-ADDRESS>
+        gitlab-pgbouncer-2:
+          ansible_host: <PGBOUNCER-2-ADDRESS>
+        gitlab-pgbouncer-3:
+          ansible_host: <PGBOUNCER-3-ADDRESS>
+    postgres:
+      children:
+        postgres_primary:
+          hosts:
+            gitlab-postgres-1:
+              ansible_host: <POSTGRES-1-ADDRESS>
+        postgres_secondary:
+          hosts:
+            gitlab-postgres-2:
+              ansible_host: <POSTGRES-2-ADDRESS>
+            gitlab-postgres-3:
+              ansible_host: <POSTGRES-3-ADDRESS>
+    praefect:
+      children:
+        praefect_primary:
+          hosts:
+            gitlab-praefect-1:
+              ansible_host: <PRAEFECT-1-ADDRESS>
+        praefect_secondary:
+          hosts:
+            gitlab-praefect-2:
+              ansible_host: <PRAEFECT-2-ADDRESS>
+            gitlab-praefect-3:
+              ansible_host: <PRAEFECT-3-ADDRESS>
+    praefect_postgres:
+      children:
+        praefect_postgres_primary:
+          hosts:
+            gitlab-praefect-postgres-1:
+              ansible_host: <PRAEFECT-POSTGRES-1-ADDRESS>
+    redis_cache:
+      children:
+        redis_cache_primary:
+          hosts:
+            gitlab-redis-cache-1:
+              ansible_host: <REDIS-CACHE-1-ADDRESS>
+        redis_cache_secondary:
+          hosts:
+            gitlab-redis-cache-2:
+              ansible_host: <REDIS-CACHE-2-ADDRESS>
+            gitlab-redis-cache-3:
+              ansible_host: <REDIS-CACHE-3-ADDRESS>
+    redis_persistent:
+      children:
+        redis_persistent_primary:
+          hosts:
+            gitlab-redis-persistent-1:
+              ansible_host: <REDIS-PERSISTENT-1-ADDRESS>
+        redis_persistent_secondary:
+          hosts:
+            gitlab-redis-persistent-2:
+              ansible_host: <REDIS-PERSISTENT-2-ADDRESS>
+            gitlab-redis-persistent-3:
+              ansible_host: <REDIS-PERSISTENT-3-ADDRESS>
+    sidekiq:
+      children:
+        sidekiq_primary:
+          hosts:
+            gitlab-sidekiq-1:
+              ansible_host: <SIDEKIQ-1-ADDRESS>
+        sidekiq_secondary:
+          hosts:
+            gitlab-sidekiq-2:
+              ansible_host: <SIDEKIQ-2-ADDRESS>
+            gitlab-sidekiq-3:
+              ansible_host: <SIDEKIQ-3-ADDRESS>
+            gitlab-sidekiq-4:
+              ansible_host: <SIDEKIQ-4-ADDRESS>
+    ungrouped:

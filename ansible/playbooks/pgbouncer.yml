@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: pgbouncer
+  roles:
+    - pgbouncer
+  become: true

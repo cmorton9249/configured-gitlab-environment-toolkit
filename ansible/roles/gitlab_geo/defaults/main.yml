@@ -1,0 +1,28 @@
+geo_primary_is_multi_node: "{{ geo_primary_site_group_name + '_postgres_primary' in groups or postgres_external }}"
+geo_secondary_is_multi_node: "{{ geo_secondary_site_group_name + '_postgres_primary' in groups or postgres_external }}"
+
+geo_secondary_site_postgres_primary_nodename: "{{ (groups[geo_secondary_site_postgres_group_name] | map('extract', hostvars, ['ansible_nodename']) | join('')) }}"
+
+geo_secondary_site_rails_primary_int_ip: "{{ (groups[geo_secondary_site_group_name + '_gitlab_rails_primary'] | sort | map('extract', hostvars, internal_ip_lookup[cloud_provider]) | join('')) }}"
+geo_secondary_site_rails_secondary_int_ips: "{{ (groups[geo_secondary_site_group_name + '_gitlab_rails_secondary'] | sort | map('extract', hostvars, internal_ip_lookup[cloud_provider]) | list if geo_secondary_site_group_name + '_gitlab_rails_secondary' in groups else '') }}"
+geo_secondary_site_sidekiq_primary_int_ip: "{{ (groups[geo_secondary_site_group_name + '_sidekiq_primary'] | sort | map('extract', hostvars, internal_ip_lookup[cloud_provider]) | join('')) }}"
+geo_secondary_site_sidekiq_secondary_int_ips: "{{ (groups[geo_secondary_site_group_name + '_sidekiq_secondary'] | sort | map('extract', hostvars, internal_ip_lookup[cloud_provider]) | list if geo_secondary_site_group_name + '_sidekiq_secondary' in groups else '') }}"
+
+tracking_db_md5_auth: "['{{ geo_secondary_site_rails_primary_int_ip }}/32'{% for ip in geo_secondary_site_rails_secondary_int_ips %}, '{{ ip }}/32'{% endfor %}, '{{ geo_secondary_site_sidekiq_primary_int_ip }}/32'{% for ip in geo_secondary_site_sidekiq_secondary_int_ips %}, '{{ ip }}/32'{% endfor %}]"
+
+gitlab_charts_repo_name: 'gitlab'
+gitlab_charts_repo_url: "https://charts.gitlab.io/"
+
+geo_primary_site_prefix: ""
+geo_primary_site_gcp_project: ""
+geo_primary_site_gcp_zone: ""
+geo_primary_site_aws_region: ""
+geo_secondary_site_prefix: ""
+geo_secondary_site_gcp_project: ""
+geo_secondary_site_gcp_zone: ""
+geo_secondary_site_aws_region: ""
+
+geo_primary_registry_url: "https://registry.{{ geo_primary_external_url | regex_replace('^https?:\/\/') }}"
+geo_secondary_registry_url: "https://registry.{{ geo_secondary_external_url | regex_replace('^https?:\/\/') }}"
+
+geo_run_patroni_workaround: true

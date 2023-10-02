@@ -1,0 +1,3 @@
+---
+
+haproxy_docker_image: haproxy:alpine

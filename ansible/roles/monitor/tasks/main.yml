@@ -1,0 +1,106 @@
+---
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Import custom Prometheus rules
+  include_tasks: rule_import.yml
+  loop: "{{ monitor_custom_rules }}"
+  tags:
+    - reconfigure
+    - rules
+
+- name: Setup GitLab config file
+  template:
+    src: templates/monitor.gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if custom config exists
+      stat:
+        path: "{{ monitor_custom_config_file }}"
+      delegate_to: localhost
+      become: false
+      register: monitor_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ monitor_custom_config_file }}"
+        dest: "/etc/gitlab/gitlab.monitor.custom.rb"
+        mode: "0644"
+      when: monitor_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.monitor.custom.rb"
+        state: absent
+      when: not monitor_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ monitor_custom_files_paths }}"
+  tags: reconfigure
+
+- name: Reconfigure GitLab
+  command: gitlab-ctl reconfigure
+  tags: reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Restart Monitor
+  shell: |
+    gitlab-ctl stop
+    pkill -f "/opt/gitlab/embedded/bin/prometheus[[:alnum:][:space:]\-]+" || echo "Prometheus is already stopped"
+    gitlab-ctl start
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+    - dashboards
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ monitor_custom_tasks_file }}"
+      register: monitor_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ monitor_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: monitor_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

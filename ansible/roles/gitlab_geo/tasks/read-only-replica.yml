@@ -1,0 +1,7 @@
+- name: Read-only Replica - Add new config
+  template:
+    src: templates/read-only-replica.rb.j2
+    dest: /etc/gitlab/gitlab.geo.read-only-replica.rb
+
+- name: Read-only Replica - Run gitlab-ctl reconfigure
+  command: gitlab-ctl reconfigure

@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: praefect_postgres
+  roles:
+    - praefect_postgres
+  become: true

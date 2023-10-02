@@ -1,0 +1,19 @@
+{% if 'haproxy_internal' in groups or 'opensearch' in groups or 'gitlab_nfs' in groups %}
+# Node (Non Omnibus)
+- job_name: non_omnibus_node
+  static_configs:
+    - targets:
+{% for ip in ([haproxy_internal_int_addr] + opensearch_int_addrs) if ip != '' %}
+      - "{{ ip }}:9100"
+{% endfor %}
+{% if 'gitlab_nfs' in groups %}
+      - "{{ gitlab_nfs_int_addr }}:9100"
+{% endif %}
+{% endif %}
+{% if 'haproxy_internal' in groups %}
+# HAProxy
+- job_name: haproxy
+  static_configs:
+    - targets:
+      - "{{ haproxy_internal_int_addr }}:1936"
+{% endif %}

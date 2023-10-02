@@ -1,0 +1,49 @@
+roles ['monitoring_role']
+
+external_url '{{ external_url_sanitised }}'
+
+# Prometheus
+prometheus['listen_address'] = '0.0.0.0:9090'
+prometheus['monitor_kubernetes'] = false
+
+prometheus['flags'] = {
+   'storage.tsdb.retention.time' => "{{ prometheus_data_retention_period }}",
+}
+
+prometheus['scrape_configs'] = [
+{% if monitor_prometheus_scrape_config_setup %}
+{% if 'consul' not in groups %}
+  {{ lookup('template', 'prometheus_scrape_configs/static_omnibus.rb.j2') | indent(width=2) }}
+{% endif %}
+  {{ lookup('template', 'prometheus_scrape_configs/static_omnibus_non_discoverable.rb.j2') | indent(width=2) }}
+  {{ lookup('template', 'prometheus_scrape_configs/static_non_omnibus.rb.j2') | indent(width=2) }}
+{% endif %}
+  {{ monitor_custom_prometheus_scrape_config }}
+]
+
+prometheus['rules_files'] = [
+  '/var/opt/gitlab/prometheus/rules/*.rules',
+{% for item in monitor_custom_rules %}
+  '/opt/prometheus/rules/{{ item.folder }}/*.rules',
+{% endfor %}
+]
+
+{% if 'consul' in groups %}
+# Consul Agent (Monitoring Auto Discovery)
+consul['enable'] = true
+consul['configuration'] = {
+  bind_addr: '{{ ansible_default_ipv4.address }}',
+  retry_join: %w({{ (consul_int_addrs | join(' ')) }})
+}
+consul['monitoring_service_discovery'] = true
+{% endif %}
+
+# Nginx
+nginx['enable'] = false
+
+node_exporter['listen_address'] = '0.0.0.0:9100'
+
+custom_confs = Dir.glob(File.join("/etc/gitlab/", "gitlab.monitor.*.rb"))
+custom_confs.each { |conf|
+  from_file conf
+}

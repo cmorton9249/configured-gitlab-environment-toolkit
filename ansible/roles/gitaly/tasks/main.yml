@@ -1,0 +1,148 @@
+---
+- name: Setup GitLab config file
+  template:
+    src: templates/gitaly.gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+  register: result
+  retries: 3
+  until: result is success
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if custom config exists
+      stat:
+        path: "{{ gitaly_custom_config_file }}"
+      delegate_to: localhost
+      become: false
+      register: gitaly_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ gitaly_custom_config_file }}"
+        dest: "/etc/gitlab/gitlab.gitaly.custom.rb"
+        mode: "0644"
+      when: gitaly_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.gitaly.custom.rb"
+        state: absent
+      when: not gitaly_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ gitaly_custom_files_paths }}"
+  tags: reconfigure
+
+- name: Setup Gitaly Internal SSL
+  block:
+    - name: Copy over any Gitaly Internal SSL files
+      copy:
+        src: "{{ item.src_path }}"
+        dest: "{{ item.dest_path }}"
+        mode: '0644'
+      loop:
+        - { src_path: "{{ gitaly_ssl_cert_file }}", dest_path: "/etc/gitlab/ssl/gitaly_cert.pem" }
+        - { src_path: "{{ gitaly_ssl_key_file }}", dest_path: "/etc/gitlab/ssl/gitaly_key.pem" }
+        - { src_path: "{{ gitaly_ssl_ca_file }}", dest_path: "/etc/gitlab/trusted-certs/gitaly_ca.pem" }
+      when: item.src_path != ''
+
+    - name: Copy Praefect Internal SSL CA file if configured
+      copy:
+        src: "{{ praefect_ssl_ca_file }}"
+        dest: '/etc/gitlab/trusted-certs/praefect_ca.pem'
+        mode: '0644'
+      when:
+        - praefect_ssl
+        - praefect_ssl_ca_file != ''
+  when: gitaly_ssl
+  tags: reconfigure
+
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Reconfigure Gitaly
+  command: gitlab-ctl reconfigure
+  tags: reconfigure
+
+- name: Restart Non Gitaly components
+  command: "gitlab-ctl restart {{ item.name }}"
+  loop:
+    - { name: "node-exporter" }
+    - { name: "consul", condition: "{{ 'consul' in groups }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  when: (item.condition is not defined or item.condition)
+  tags:
+    - reconfigure
+    - restart
+    - test
+
+- name: Create Default Gitaly Sharded directory
+  file:
+    path: "{{ gitaly_sharded_storage_path }}/default/repositories"
+    state: directory
+    mode: '2770'
+    owner: git
+    group: git
+  when:
+    - "'gitaly_primary' in group_names"
+    - "'praefect' not in groups"
+  tags: reconfigure
+
+- name: Create Additional Gitaly Sharded directories
+  file:
+    path: "{{ gitaly_sharded_storage_path }}/storage{{ gitaly_number }}/repositories"
+    state: directory
+    mode: '2770'
+    owner: git
+    group: git
+  when: "'praefect' not in groups"
+  tags: reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ gitaly_custom_tasks_file }}"
+      register: gitaly_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ gitaly_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: gitaly_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

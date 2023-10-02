@@ -1,0 +1,18 @@
+roles ['consul_role']
+
+gitlab_rails['auto_migrate'] = false
+
+consul['configuration'] = {
+  server: true,
+  retry_join: %w({{ consul_int_addrs | join(' ') }}),
+  bind_addr: '{{ ansible_default_ipv4.address }}',
+  log_json: true,
+  {{ consul_additional_config | indent( width=2 ) }}
+}
+consul['monitoring_service_discovery'] = true
+node_exporter['listen_address'] = '0.0.0.0:9100'
+
+custom_confs = Dir.glob(File.join("/etc/gitlab/", "gitlab.consul.*.rb"))
+custom_confs.each { |conf|
+  from_file conf
+}

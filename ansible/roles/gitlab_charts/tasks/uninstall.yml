@@ -1,0 +1,10 @@
+---
+- name: Configure kubeconfig credentials
+  import_tasks: kubeconfig.yml
+
+- name: Uninstall GitLab Charts
+  kubernetes.core.helm:
+    release_name: gitlab
+    release_namespace: "{{ gitlab_charts_release_namespace }}"
+    state: absent
+    wait: true

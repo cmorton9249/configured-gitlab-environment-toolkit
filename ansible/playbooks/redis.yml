@@ -1,0 +1,10 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts:
+    - redis
+    - redis_cache_*
+    - redis_persistent_*
+  roles:
+    - redis
+  become: true

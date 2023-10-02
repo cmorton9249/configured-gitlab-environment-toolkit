@@ -1,0 +1,34 @@
+global
+    log /dev/log local0
+    log localhost local1 notice
+    log stdout format raw local0
+    maxconn 10000
+    daemon
+ 
+defaults
+    log global
+    mode http
+    default-server inter 10s fall 3 rise 2
+    balance leastconn
+    compression algo gzip
+    compression type text/css text/html text/plain text/xml application/json
+    option httplog
+    option dontlognull
+    retries 3
+    timeout connect 30s
+    timeout client 305s
+    timeout server 305s
+ 
+{% if 'haproxy_external' in hostvars[inventory_hostname].group_names %}
+{% include 'haproxy_external.cfg.j2' %}
+{% else %}
+{% include 'haproxy_internal.cfg.j2' %}
+{% endif %}
+
+listen stats
+    bind *:1936
+    http-request use-service prometheus-exporter if { path /metrics }
+    mode http
+    stats enable
+    stats uri /
+    stats refresh 10s

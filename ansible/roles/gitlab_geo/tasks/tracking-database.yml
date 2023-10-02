@@ -1,0 +1,61 @@
+- name: Configure Tracking database for Omnibus managed databases
+  block:
+    - name: Tracking Database - Add new config
+      template:
+        src: templates/tracking-database.rb.j2
+        dest: /etc/gitlab/gitlab.geo.tracking-database.rb
+
+    - name: Tracking Database - Run gitlab-ctl reconfigure
+      command: gitlab-ctl reconfigure
+
+    - name: Tracking Database - Run gitlab-ctl restart for updates to take effect
+      command: gitlab-ctl restart
+  when:
+    - ('postgres' in group_names) or
+      ('gitlab_rails' in group_names and geo_secondary_site_group_name + '_postgres_primary' not in groups and not postgres_external)
+    - (geo_secondary_site_group_name in group_names)
+
+- name: Tracking Database - Get random host to use as deploy node
+  run_once: true
+  set_fact:
+    deploy_host: "{{ groups[geo_secondary_site_group_name] | random }}"
+  when:
+    - postgres_external
+    - geo_secondary_praefect_postgres_host == geo_tracking_postgres_host
+
+- name: Configure Tracking database for externally managed databases
+  block:
+    - name: Tracking Database - Create Geo tracking user
+      community.postgresql.postgresql_user:
+        login_host: "{{ geo_secondary_praefect_postgres_host }}"
+        login_port: "{{ praefect_postgres_port }}"
+        login_user: "{{ praefect_postgres_admin_username }}"
+        login_password: "{{ praefect_postgres_admin_password }}"
+        db: "template1"
+        name: "{{ geo_tracking_postgres_user }}"
+        password: "{{ geo_tracking_postgres_password }}"
+        role_attr_flags: CREATEDB
+        expires: infinity
+
+    - name: Tracking Database - Create Geo tracking database
+      community.postgresql.postgresql_db:
+        login_host: "{{ geo_secondary_praefect_postgres_host }}"
+        login_port: "{{ praefect_postgres_port }}"
+        login_user: "{{ geo_tracking_postgres_user }}"
+        login_password: "{{ geo_tracking_postgres_password }}"
+        name: "{{ geo_tracking_postgres_database }}"
+        encoding: UTF-8
+
+    - name: Tracking Database - Enable required Postgres extensions
+      community.postgresql.postgresql_ext:
+        login_host: "{{ geo_secondary_praefect_postgres_host }}"
+        login_port: "{{ praefect_postgres_port }}"
+        login_user: "{{ praefect_postgres_admin_username }}"
+        login_password: "{{ praefect_postgres_admin_password }}"
+        name: "{{ item }}"
+        db: "{{ geo_tracking_postgres_database }}"
+      loop: ['pg_trgm', 'btree_gist', 'plpgsql', 'pg_stat_statements']
+  when:
+    - praefect_postgres_external_prep
+    - deploy_host is defined
+    - inventory_hostname == deploy_host

@@ -1,0 +1,3 @@
+---
+
+prometheus_data_retention_period: "30d"

@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: haproxy_*
+  roles:
+    - haproxy
+  become: true

@@ -1,0 +1,26 @@
+{% if 'pgbouncer' in groups %}
+# PgBouncer
+{
+  'job_name': 'pgbouncer',
+  'static_configs': [
+    'targets': [
+{% for ip in pgbouncer_int_addrs %}
+      "{{ ip }}:9188",
+{% endfor %}
+    ],
+  ],
+},
+{% endif %}
+{% if 'praefect' in groups %}
+# Praefect
+{
+  'job_name': 'praefect',
+  'static_configs': [
+    'targets': [
+{% for ip in praefect_int_addrs %}
+      "{{ ip }}:9652",
+{% endfor %}
+    ],
+  ],
+},
+{% endif %}

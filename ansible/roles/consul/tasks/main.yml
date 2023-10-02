@@ -1,0 +1,112 @@
+---
+- name: Setup GitLab config file
+  template:
+    src: templates/consul.gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if custom config exists
+      stat:
+        path: "{{ consul_custom_config_file }}"
+      delegate_to: localhost
+      become: false
+      register: consul_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ consul_custom_config_file }}"
+        dest: "/etc/gitlab/gitlab.consul.custom.rb"
+        mode: "0644"
+      when: consul_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.consul.custom.rb"
+        state: absent
+      when: not consul_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ consul_custom_files_paths }}"
+  tags: reconfigure
+
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Clear old Consul data if Nightly
+  block:
+    - name: Stop Consul
+      command: gitlab-ctl stop consul
+
+    - name: Clear old Consul data if Nightly
+      file:
+        path: /var/opt/gitlab/consul/data
+        state: absent
+  when: "'nightly' in gitlab_repo_script_url"
+  tags: reconfigure
+
+- name: Reconfigure Consul
+  command: gitlab-ctl reconfigure
+  throttle: 1
+  register: result
+  retries: 3
+  until: result is success
+  tags: reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Restart Consul
+  command: gitlab-ctl restart
+  throttle: 1
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ consul_custom_tasks_file }}"
+      register: consul_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ consul_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: consul_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

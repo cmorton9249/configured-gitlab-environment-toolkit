@@ -1,0 +1,50 @@
+# Disable all components except Pgbouncer and Consul agent
+roles ['pgbouncer_role']
+
+# Configure Pgbouncer
+
+{% if groups['postgres'] | length > 1 %}
+pgbouncer['users'] = {
+  'gitlab-consul': {
+    password: "{{ ((consul_database_password | default(consul_password)) + 'gitlab-consul') | md5 }}"
+  },
+  'pgbouncer': {
+    password: "{{ (pgbouncer_password + 'pgbouncer') | md5 }}"
+  }
+}
+{% else %}
+pgbouncer['admin_users'] = %w(pgbouncer gitlab-consul)
+pgbouncer['databases'] = {
+  gitlabhq_production: {
+    host: "{{ postgres_host }}",
+    user: "pgbouncer",
+    password: "{{ (pgbouncer_password + 'pgbouncer') | md5 }}"
+  }
+}
+{% endif %}
+
+{% if 'consul' in groups %}
+# Consul Agent (Monitoring Auto Discovery)
+consul['enable'] = true
+consul['configuration'] = {
+  bind_addr: '{{ ansible_default_ipv4.address }}',
+  retry_join: %w({{ (consul_int_addrs | join(' ')) }})
+}
+consul['monitoring_service_discovery'] = true
+
+# Consul Agent (Postgres HA)
+{% if groups['postgres'] | length > 1 %}
+consul['watchers'] = %w(postgresql)
+{% endif %}
+
+{% endif %}
+
+node_exporter['listen_address'] = '0.0.0.0:9100'
+
+pgbouncer_exporter['enable'] = true
+pgbouncer_exporter['listen_address'] = '0.0.0.0:9188'
+
+custom_confs = Dir.glob(File.join("/etc/gitlab/", "gitlab.pgbouncer.*.rb"))
+custom_confs.each { |conf|
+  from_file conf
+}

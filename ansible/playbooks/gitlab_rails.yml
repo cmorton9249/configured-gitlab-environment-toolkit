@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: gitlab_rails
+  become: true
+  roles:
+    - gitlab_rails

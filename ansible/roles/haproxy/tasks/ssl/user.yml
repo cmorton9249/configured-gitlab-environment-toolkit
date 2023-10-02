@@ -1,0 +1,32 @@
+---
+- name: Check if External SSL certificate is provided
+  stat:
+    path: "{{ external_ssl_files_host_certificate_file }}"
+  delegate_to: localhost
+  become: false
+  register: ssl_pem
+
+- name: Fail if External SSL certificate is missing
+  fail:
+    msg: "External SSL certificate file '{{ external_ssl_files_host_certificate_file | basename }}' could not be found in path '{{ external_ssl_files_host_certificate_file | realpath }}'. Check that the file is present as configured and run again. Exiting..."
+  when: not ssl_pem.stat.exists
+
+- name: Check if External SSL key is provided
+  stat:
+    path: "{{ external_ssl_files_host_key_file }}"
+  delegate_to: localhost
+  become: false
+  register: ssl_key
+
+- name: Fail if External SSL key is missing
+  fail:
+    msg: "External SSL key file '{{ external_ssl_files_host_key_file | basename }}' could not be found in path '{{ external_ssl_files_host_key_file | realpath }}'. Check that the file is present as configured and run again. Exiting..."
+  when: not ssl_key.stat.exists
+
+- name: Copy over User provided SSL Certificates
+  copy:
+    src: "{{ item.hostfile }}"
+    dest: "{{ item.targetfile }}"
+  loop:
+    - { hostfile: "{{ external_ssl_files_host_certificate_file }}", targetfile: "/opt/haproxy/{{ external_host }}.pem" }
+    - { hostfile: "{{ external_ssl_files_host_key_file }}", targetfile: "/opt/haproxy/{{ external_host }}.pem.key" }

@@ -1,0 +1,123 @@
+---
+- name: Update Ulimit Open Files
+  pam_limits:
+    domain: '*'
+    limit_type: '-'
+    limit_item: nofile
+    value: '10240'
+  tags: ulimit
+
+- name: Setup GitLab config file
+  template:
+    src: templates/pgbouncer.gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if custom config exists
+      stat:
+        path: "{{ pgbouncer_custom_config_file }}"
+      delegate_to: localhost
+      become: false
+      register: pgbouncer_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ pgbouncer_custom_config_file }}"
+        dest: "/etc/gitlab/gitlab.pgbouncer.custom.rb"
+        mode: "0644"
+      when: pgbouncer_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.pgbouncer.custom.rb"
+        state: absent
+      when: not pgbouncer_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ pgbouncer_custom_files_paths }}"
+  tags: reconfigure
+
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Reconfigure PgBouncer
+  command: gitlab-ctl reconfigure
+  register: result
+  retries: 1
+  until: result is success
+  tags: reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Restart PgBouncer
+  command: gitlab-ctl restart
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+
+- name: Create .pgpass file
+  command: gitlab-ctl write-pgpass --host 127.0.0.1 --database pgbouncer --hostuser gitlab-consul
+  args:
+    stdin: "{{ pgbouncer_password }}\n{{ pgbouncer_password }}\n"
+    creates: /var/opt/gitlab/postgresql/.pgpass
+  tags: reconfigure
+
+# Bug - https://gitlab.com/gitlab-org/omnibus-gitlab/issues/3448
+- name: Restart Consul
+  command: gitlab-ctl restart consul
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ pgbouncer_custom_tasks_file }}"
+      register: pgbouncer_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ pgbouncer_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: pgbouncer_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

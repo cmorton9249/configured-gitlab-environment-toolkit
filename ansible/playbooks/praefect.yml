@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: praefect
+  roles:
+    - praefect
+  become: true

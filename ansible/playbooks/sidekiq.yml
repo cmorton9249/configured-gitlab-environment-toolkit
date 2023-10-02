@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: sidekiq
+  roles:
+    - sidekiq
+  become: true

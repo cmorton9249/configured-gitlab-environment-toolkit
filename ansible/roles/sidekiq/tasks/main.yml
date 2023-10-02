@@ -1,0 +1,130 @@
+---
+- name: Mount NFS if configured
+  include_role:
+    name: gitlab_nfs
+    tasks_from: nfs_mount
+  when:
+    - "'gitlab_nfs' in groups"
+
+- name: Setup GitLab config file
+  template:
+    src: templates/sidekiq.gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if Custom Config exists
+      stat:
+        path: "{{ sidekiq_custom_config_file }}"
+      delegate_to: localhost
+      become: false
+      register: sidekiq_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ sidekiq_custom_config_file }}"
+        dest: "/etc/gitlab/gitlab.sidekiq.custom.rb"
+        mode: "0644"
+      when: sidekiq_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.sidekiq.custom.rb"
+        state: absent
+      when: not sidekiq_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ sidekiq_custom_files_paths }}"
+  tags: reconfigure
+
+- name: Copy Praefect or Gitaly CA files if configured
+  block:
+    - name: Copy Praefect Internal SSL CA file if configured
+      copy:
+        src: "{{ praefect_ssl_ca_file }}"
+        dest: '/etc/gitlab/trusted-certs/praefect_ca.pem'
+        mode: '0644'
+      when:
+        - "'praefect' in groups"
+        - praefect_ssl
+        - praefect_ssl_ca_file != ''
+
+    - name: Copy Gitaly Internal SSL CA file if configured
+      copy:
+        src: "{{ gitaly_ssl_ca_file }}"
+        dest: '/etc/gitlab/trusted-certs/gitaly_ca.pem'
+        mode: '0644'
+      when:
+        - "'praefect' not in groups"
+        - "'gitaly' in groups"
+        - gitaly_ssl
+        - gitaly_ssl_ca_file != ''
+  tags: reconfigure
+
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Reconfigure Sidekiq
+  command: gitlab-ctl reconfigure
+  register: result
+  retries: 3
+  until: result is success
+  tags:
+    - reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Restart Sidekiq
+  command: gitlab-ctl restart
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ sidekiq_custom_tasks_file }}"
+      register: sidekiq_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ sidekiq_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: sidekiq_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

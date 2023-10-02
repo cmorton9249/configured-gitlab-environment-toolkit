@@ -1,0 +1,7 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: consul
+  roles:
+    - consul
+  become: true

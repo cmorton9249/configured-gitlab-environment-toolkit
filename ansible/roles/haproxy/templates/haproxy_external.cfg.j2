@@ -1,0 +1,50 @@
+frontend http-in
+    bind *:80
+{% if external_url_ssl and external_ssl_source != '' %}
+    bind *:443 ssl crt /usr/local/etc/haproxy/{{ external_host }}.pem
+
+    http-request redirect scheme https unless { ssl_fc }
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+    http-request set-header X-Forwarded-Ssl on if { ssl_fc }
+{% endif %}
+
+{% if container_registry_enable %}
+    acl gitlab-registry hdr(host) -i {{ container_registry_external_host }}
+    use_backend gitlab-registry if gitlab-registry
+{% endif %}
+
+    default_backend gitlab-rails
+
+frontend gitlab-ssh-in
+    bind *:{{ gitlab_shell_ssh_port }}
+    mode tcp
+    option tcplog
+    option clitcpka
+
+    default_backend gitlab-rails-ssh
+
+backend gitlab-rails
+    option httpchk GET /-/readiness
+    option forwardfor
+
+{% for ip in gitlab_rails_int_addrs %}
+    server gitlab-rails{{loop.index}} {{ ip }}:80 check inter 3s fall 1
+{% endfor %}
+
+backend gitlab-rails-ssh
+    mode tcp
+    option tcp-check
+    option srvtcpka
+
+{% for ip in gitlab_rails_int_addrs %}
+    server gitlab-rails{{loop.index}} {{ ip }}:{{ gitlab_shell_ssh_internal_port }} track gitlab-rails/gitlab-rails{{loop.index}}
+{% endfor %}
+
+{% if container_registry_enable %}
+backend gitlab-registry
+    option forwardfor
+
+{% for ip in gitlab_rails_int_addrs %}
+    server gitlab-rails{{loop.index}} {{ ip }}:80
+{% endfor %}
+{% endif %}

@@ -1,0 +1,66 @@
+---
+prometheus:
+  enabled: true
+  prometheusSpec:
+    replicas: 1
+    walCompression: true
+    nodeSelector:
+      workload: support
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+{% if kube_prometheus_stack_charts_storage_class != '' %}
+          storageClassName: "{{ kube_prometheus_stack_charts_storage_class }}"
+{% endif %}
+          resources:
+            requests:
+              storage: "{{ kube_prometheus_stack_charts_storage_size }}"
+    scrapeInterval: 15s
+    scrapeTimeout: 15s
+    evaluationInterval: 1m
+    retention: 30d
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    additionalScrapeConfigs:
+{% if kube_prometheus_stack_charts_prometheus_scrape_config_setup %}
+{% if 'consul' in groups %}
+      {{ lookup('template', 'prometheus_scrape_configs/consul_omnibus.yml.j2') | indent(width=6) }}
+{% else %}
+      {{ lookup('template', 'prometheus_scrape_configs/static_omnibus.yml.j2') | indent(width=6) }}
+{% endif %}
+      {{ lookup('template', 'prometheus_scrape_configs/static_omnibus_non_discoverable.yml.j2') | indent(width=6) }}
+      {{ lookup('template', 'prometheus_scrape_configs/static_non_omnibus.yml.j2') | indent(width=6) }}
+{% endif %}
+{% for custom in kube_prometheus_stack_charts_custom_scrape_config %}
+      - {{ custom }}
+{% endfor %}
+
+kube-state-metrics:
+  nodeSelector:
+    workload: support
+
+prometheusOperator:
+  nodeSelector:
+    workload: support
+
+grafana:
+  enabled: false
+
+{% if cloud_provider == 'gcp' %}
+coreDns:
+  enabled: false
+kubeDns:
+  enabled: true
+{% endif %}
+
+# Alertmanager
+alertmanager:
+  enabled: false
+defaultRules:
+  create: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

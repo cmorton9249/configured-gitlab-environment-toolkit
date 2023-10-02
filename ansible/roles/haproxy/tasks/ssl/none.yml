@@ -1,0 +1,13 @@
+---
+- name: Remove certbot
+  package:
+    name: certbot
+    state: absent
+
+- name: Delete any existing SSL files or config
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/opt/haproxy/{{ external_host }}.pem"
+    - "/opt/haproxy/{{ external_host }}.pem.key"

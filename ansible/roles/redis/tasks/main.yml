@@ -1,0 +1,98 @@
+---
+- name: Setup GitLab config file
+  template:
+    src: "templates/redis.gitlab.rb.j2"
+    dest: /etc/gitlab/gitlab.rb
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if Custom Config exists
+      stat:
+        path: "{{ lookup('vars', redis_group_name + '_custom_config_file') }}"
+      delegate_to: localhost
+      become: false
+      register: redis_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ lookup('vars', redis_group_name + '_custom_config_file') }}"
+        dest: "/etc/gitlab/gitlab.{{ redis_group_name }}.custom.rb"
+        mode: "0644"
+      when: redis_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.{{ redis_group_name }}.custom.rb"
+        state: absent
+      when: not redis_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ lookup('vars', redis_group_name + '_custom_files_paths') }}"
+  tags: reconfigure
+
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Reconfigure Redis
+  command: gitlab-ctl reconfigure
+  register: result
+  retries: 2
+  until: result is success
+  tags: reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Restart Redis
+  command: gitlab-ctl restart
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ lookup('vars', redis_group_name + '_custom_tasks_file') }}"
+      register: redis_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ lookup('vars', redis_group_name + '_custom_tasks_file') }}"
+        apply:
+          tags: custom_tasks
+      when: redis_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

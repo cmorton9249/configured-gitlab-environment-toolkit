@@ -1,0 +1,448 @@
+gitlab:
+  webservice:
+    maxReplicas: "{{ gitlab_charts_webservice_max_replicas if gitlab_charts_webservice_max_replicas != '' else webservice_replicas }}"
+    minReplicas: "{{ gitlab_charts_webservice_min_replicas if gitlab_charts_webservice_min_replicas != '' else (webservice_replicas | int * gitlab_charts_webservice_min_replicas_scaler) | int }}"
+    hpa:
+{% if gitlab_version != '' and gitlab_version is version('15.2', '<') %}
+      targetAverageValue: 1600m
+{% else %}
+      cpu:
+        targetAverageValue: 1600m
+{% endif %}
+    resources:
+      limits:
+        memory: "{{ gitlab_charts_webservice_limits_memory_gb }}G"
+      requests:
+        cpu: "{{ gitlab_charts_webservice_requests_cpu }}"
+        memory: "{{ gitlab_charts_webservice_requests_memory_gb }}G"
+    workerProcesses: "{{ gitlab_charts_webservice_requests_cpu }}"
+    ingress:
+      proxyBodySize: 0  # Bigger file uploads, e.g. imports
+    nodeSelector:
+      workload: webservice
+{% if cloud_provider == 'aws' %}
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: "{{ aws_iam_arn_prefix }}:role/{{ prefix }}-eks-webservice-role" 
+{% endif %}
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+    workhorse:
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+# Workaround for project deletion bug https://gitlab.com/gitlab-org/gitlab/-/issues/24110#note_729703160
+{% if not container_registry_enable and gitlab_version != '' and gitlab_version is version('16.0', '<') %}
+    registry:
+      enabled: false
+{% endif %}
+{% if geo_disable_secondary_proxying %}
+    extraEnv:
+      GEO_SECONDARY_PROXY: "0"
+{% endif %}
+  sidekiq:
+    maxReplicas: "{{ gitlab_charts_sidekiq_max_replicas if gitlab_charts_sidekiq_max_replicas != '' else sidekiq_replicas }}"
+    minReplicas: "{{ gitlab_charts_sidekiq_min_replicas if gitlab_charts_sidekiq_min_replicas != '' else (sidekiq_replicas | int * gitlab_charts_sidekiq_min_replicas_scaler) | int }}"
+    concurrency: "{{ sidekiq_max_concurrency }}"
+    hpa:
+{% if gitlab_version != '' and gitlab_version is version('15.2', '<') %}
+      targetAverageValue: 700m
+{% else %}
+      cpu:
+        targetAverageValue: 700m
+{% endif %}
+    resources:
+      limits:
+        memory: "{{ gitlab_charts_sidekiq_limits_memory_gb }}G"
+      requests:
+        cpu: "{{ gitlab_charts_sidekiq_requests_cpu }}"
+        memory: "{{ gitlab_charts_sidekiq_requests_memory_gb }}G"
+    nodeSelector:
+      workload: sidekiq
+{% if cloud_provider == 'aws' %}
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: "{{ aws_iam_arn_prefix }}:role/{{ prefix }}-eks-sidekiq-role"
+{% endif %}
+    metrics:
+      enabled: true
+      podMonitor:
+        enabled: true
+# Workaround for project deletion bug https://gitlab.com/gitlab-org/gitlab/-/issues/24110#note_729703160
+{% if not container_registry_enable and gitlab_version != '' and gitlab_version is version('16.0', '<') %}
+    registry:
+      enabled: false
+{% endif %}
+  "{{ 'task-runner' if ((gitlab_version != '') and (gitlab_version is version('14.5', '<'))) else 'toolbox' }}":
+{% if cloud_provider == 'aws' or (cloud_provider == 'gcp' and gcp_backups_service_account_key_file != '') %}
+    backups:
+      objectStorage:
+        {{ lookup('template', 'object_storage/task_runner_backups_object_storage.' + cloud_provider + '.yml.j2') | indent(width=8) }}
+{% endif %}
+{% if cloud_provider == 'aws' %}
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: "{{ aws_iam_arn_prefix }}:role/{{ prefix }}-eks-toolbox-role"
+{% endif %}
+# Workaround for project deletion bug https://gitlab.com/gitlab-org/gitlab/-/issues/24110#note_729703160
+{% if not container_registry_enable and gitlab_version != '' and gitlab_version is version('16.0', '<') %}
+    registry:
+      enabled: false
+{% endif %}
+  migrations:
+    psql:
+      password:
+        secret: gitlab-postgres-password
+        key: password
+      host: "{{ postgres_migrations_host }}"
+      port: "{{ postgres_migrations_port }}"
+{% if 'postgres' not in groups %}
+      username: "{{ postgres_username }}"
+      database: "{{ postgres_database_name }}"
+{% endif %}
+{% if gitlab_shell_ssh_daemon == 'gitlab-sshd' %}
+  gitlab-shell:
+    sshDaemon: "{{ gitlab_shell_ssh_daemon }}"
+    service:
+      internalPort: "{{ gitlab_shell_ssh_internal_port }}"
+{% endif %}
+  gitlab-exporter:
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+  kas:
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+
+global:
+  # Deploy pods to Supporting node pool by default unless otherwise configured
+  nodeSelector:
+    workload: "support"
+  serviceAccount:
+    enabled: true
+  appConfig:
+{% if cloud_provider != 'none' %}
+    object_store:
+      enabled: true
+      connection:
+        secret: gitlab-object-storage-key
+        key: key
+{% if 'artifacts' in gitlab_object_storage_list %}
+    artifacts:
+      bucket: "{{ gitlab_object_storage_bucket_names['artifacts'] }}"
+{% endif %}
+{% if 'lfs' in gitlab_object_storage_list %}
+    lfs:
+      bucket: "{{ gitlab_object_storage_bucket_names['lfs'] }}"
+{% endif %}
+{% if 'packages' in gitlab_object_storage_list %}
+    packages:
+      bucket: "{{ gitlab_object_storage_bucket_names['packages'] }}"
+{% endif %}
+{% if 'uploads' in gitlab_object_storage_list %}
+    uploads:
+      bucket: "{{ gitlab_object_storage_bucket_names['uploads'] }}"
+{% endif %}
+{% if 'external_diffs' in gitlab_object_storage_list %}
+    externalDiffs:
+      enabled: true
+      bucket: "{{ gitlab_object_storage_bucket_names['external_diffs'] }}"
+      when: outdated
+{% endif %}
+{% if 'dependency_proxy' in gitlab_object_storage_list %}
+    dependencyProxy:
+      enabled: true
+      bucket: "{{ gitlab_object_storage_bucket_names['dependency_proxy'] }}"
+{% endif %}
+{% if 'terraform_state' in gitlab_object_storage_list %}
+    terraformState:
+      enabled: true
+      bucket: "{{ gitlab_object_storage_bucket_names['terraform_state'] }}"
+{% endif %}
+{% if 'ci_secure_files' in gitlab_object_storage_list and (gitlab_version == '' or gitlab_version is version('15.7', '>=')) %}
+    ciSecureFiles:
+      enabled: true
+      bucket: "{{ gitlab_object_storage_bucket_names['ci_secure_files'] }}"
+      connection:
+        secret: gitlab-object-storage-key
+        key: key
+{% endif %}
+{% if 'backups' in gitlab_object_storage_list and (cloud_provider == 'aws' or (cloud_provider == 'gcp' and gcp_backups_service_account_key_file != '')) %}
+    backups:
+      bucket: "{{ gitlab_object_storage_bucket_names['backups'] }}"
+{% endif %}
+{% endif %}
+  initialRootPassword:
+    secret: gitlab-initial-root-password
+    key: password
+  railsSecrets:
+    secret: gitlab-rails-secrets
+  registry:
+{% if container_registry_enable %}
+    enabled: true
+{% else %}
+    enabled: false
+{% endif %}
+  shell:
+    port: {{ gitlab_shell_ssh_port }}
+    authToken:
+      secret: gitlab-shell-token
+      key: password
+  gitaly:
+{% if 'praefect' in groups %}
+    authToken:
+      secret: gitlab-praefect-external-token
+      key: password
+    enabled: false # Gitaly runs outside of cluster
+    external:
+    - name: default
+      hostname: "{{ internal_lb_host }}"
+{% if praefect_ssl %}
+      port: "{{ praefect_ssl_port }}"
+      tlsEnabled: true
+{% else %}
+      port: 2305
+{% endif %}
+{% elif 'gitaly' in groups %}
+    authToken:
+      secret: gitlab-gitaly-external-token
+      key: password
+    enabled: false # Gitaly runs outside of cluster
+    external:
+    - name: default
+      hostname: "{{ gitaly_primary_int_addr }}"
+{% if gitaly_ssl %}
+      port: "{{ gitaly_ssl_port }}"
+      tlsEnabled: true
+{% else %}
+      port: 8075
+{% endif %}
+{% for gitaly_secondary_ip in gitaly_secondary_int_addrs %}
+    - name: "storage{{loop.index + 1}}"
+      hostname: "{{ gitaly_secondary_ip }}"
+{% if gitaly_ssl %}
+      port: "{{ gitaly_ssl_port }}"
+      tlsEnabled: true
+{% else %}
+      port: 8075
+{% endif %}
+{% endfor %}
+{% endif %}
+  hosts:
+{% if cloud_provider != 'aws' %}
+    externalIP: "{{ external_ip }}"
+{% endif %}
+    domain: "{{ external_host }}"
+    https: {{ external_url_ssl | lower }}
+    gitlab:
+      name: "{{ external_host }}"
+    registry:
+      name: "{{ container_registry_external_host }}"
+  ingress:
+{% if external_url_ssl and external_ssl_source == 'letsencrypt' %}
+    configureCertmanager: true
+{% elif external_url_ssl and external_ssl_source == 'user' %}
+    configureCertmanager: false
+    tls:
+      secretName: gitlab-webservice-ssl
+{% else %}
+    configureCertmanager: false
+    tls:
+      enabled: false
+{% endif %}
+  certificates:
+    customCAs:
+{% if 'praefect' in groups and praefect_ssl %}
+      - secret: praefect-ca
+{% elif 'gitaly' in groups and gitaly_ssl %}
+      - secret: gitaly-ca
+{% endif %}
+  minio:
+    enabled: false
+  psql:
+    password:
+      secret: gitlab-postgres-password
+      key: password
+{% if postgres_external %}
+    host: "{{ postgres_host }}"
+    port: "{{ postgres_port }}"
+    username: "{{ postgres_username }}"
+    database: "{{ postgres_database_name }}"
+{% if postgres_load_balancing_hosts | length > 0 %}
+    load_balancing:
+      hosts:
+{% for postgres_load_balancing_host in postgres_load_balancing_hosts %}
+        - "{{ postgres_load_balancing_host }}"
+{% endfor %}
+{% endif %}
+{% elif 'postgres' in groups %}
+    host: "{{ internal_lb_host if 'haproxy_internal' in groups else postgres_host }}"
+    port: "{{ 6432 if 'haproxy_internal' in groups else postgres_port }}"
+{% if groups['postgres'] | length > 1 %}
+    load_balancing:
+      hosts:
+{% for postgres_int_addr in postgres_int_addrs %}
+        - "{{ postgres_int_addr }}"
+{% endfor %}
+{% endif %}
+{% endif %}
+# Redis
+  redis:
+{% if redis_external %}
+## Redis Non Omnibus (PaaS \ User Provided)
+### Combined Queues
+    host: "{{ redis_host }}"
+    port: "{{ redis_port }}"
+    "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+      secret: gitlab-redis-password
+      key: password
+    scheme: "{{ 'rediss' if redis_external_ssl else 'redis' }}"
+{% elif redis_cache_external and redis_persistent_external %}
+### Separate Queues
+#### Default
+    host: "{{ redis_persistent_host }}"
+    port: "{{ redis_persistent_port }}"
+    "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+      secret: gitlab-redis-persistent-password
+      key: password
+    scheme: "{{ 'rediss' if redis_persistent_external_ssl else 'redis' }}"
+#### Cache
+    cache:
+      host: "{{ redis_cache_host }}"
+      port: "{{ redis_cache_port }}"
+      "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+        secret: gitlab-redis-cache-password
+        key: password
+      scheme: "{{ 'rediss' if redis_cache_external_ssl else 'redis' }}"
+{% elif 'redis' in groups %}
+## Redis Omnibus - Separate Node(s)
+### Single Node - Combined Queues
+{% if groups['redis'] | length == 1 %}
+    host: '{{ redis_host }}'
+    port: '{{ redis_port }}'
+    "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+      secret: gitlab-redis-password
+      key: password
+{% elif groups['redis'] | length > 1 %}
+#### Multi Node - Combined Queues
+    host: gitlab-redis
+    "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+      secret: gitlab-redis-password
+      key: password
+    sentinels:
+{% for ip in redis_int_addrs %}
+      - host: '{{ ip }}'
+        port: '{{ redis_sentinel_port }}'
+{% endfor %}
+{% endif %}
+{% elif 'redis_cache' in groups and 'redis_persistent' in groups %}
+### Multi Node - Separate Queues
+#### Default
+    host: gitlab-redis-persistent
+    "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+      secret: gitlab-redis-persistent-password
+      key: password
+    sentinels:
+{% for ip in redis_persistent_int_addrs %}
+      - host: '{{ ip }}'
+{% endfor %}
+#### Cache
+    cache:
+      host: gitlab-redis-cache
+      "{{ 'password' if ((gitlab_version != '') and (gitlab_version is version('16.0', '<'))) else 'auth' }}":
+        secret: gitlab-redis-cache-password
+        key: password
+      sentinels:
+{% for ip in redis_cache_int_addrs %}
+      - host: '{{ ip }}'
+{% endfor %}
+{% endif %}
+{% if container_registry_enable %}
+  registry:
+    enabled: true
+    # global.registry.bucket is used by GitLab backups
+    bucket: "{{ gitlab_object_storage_bucket_names['registry'] }}"
+# Needed on Primary and Secondary sites to ensure secret is synced
+{% if (container_registry_token is defined) %}
+    notificationSecret:
+      secret: gitlab-registry-notification
+      key: secret_token
+{% endif %}
+{% endif %}
+{% if cloud_native_hybrid_geo %}
+  geo:
+    nodeName: "{{ geo_primary_site_name if cloud_native_hybrid_geo_role == 'primary' else geo_secondary_site_name }}"
+    enabled: true
+    role: "{{ cloud_native_hybrid_geo_role }}"
+    psql:
+      host: "{{ geo_tracking_postgres_host }}"
+      port: "{{ geo_tracking_postgres_port }}"
+      password:
+        secret: gitlab-geo-tracking-postgres-password
+        key: password
+{% if container_registry_enable %}
+    registry:
+      replication:
+        enabled: true
+{% if cloud_native_hybrid_geo_role == 'secondary' %}
+        primaryApiUrl: "{{ container_registry_external_url }}"
+{% endif %}
+{% endif %}
+{% endif %}
+
+nginx-ingress:
+  controller:
+    scope:
+      enabled: false
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+{% if aws_allocation_ids != "" %}
+    service:
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-type: nlb
+        service.beta.kubernetes.io/aws-load-balancer-eip-allocations: "{{ aws_allocation_ids | replace(' ', '') }}"
+        service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+        service.beta.kubernetes.io/aws-load-balancer-target-node-labels: workload=support
+{% endif %}
+
+{% if external_url_ssl and external_ssl_source == 'letsencrypt' %}
+certmanager:
+  install: true
+certmanager-issuer:
+  email: "{{ external_ssl_letsencrypt_issuer_email }}"
+{% else %}
+certmanager:
+  install: false
+{% endif %}
+
+# Run outside of cluster
+redis:
+  install: false
+registry:
+{% if container_registry_enable %}
+  storage:
+    secret: gitlab-container-registry-object-storage-key
+    key: config
+{% if cloud_provider == 'aws' %}
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "{{ aws_iam_arn_prefix }}:role/{{ prefix }}-eks-registry-role"
+{% endif %}
+{% else %}
+  enabled: false
+{% endif %}
+postgresql:
+  install: false
+prometheus:
+  install: false
+# https://docs.gitlab.com/ee/ci/runners/#configuring-runners-in-gitlab
+gitlab-runner:
+  install: false

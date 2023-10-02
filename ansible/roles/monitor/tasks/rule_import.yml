@@ -1,0 +1,41 @@
+- name: Update Prometheus rule directories
+  block:
+    - name: Check if {{ item.folder }} rules exist
+      stat:
+        path: "{{ monitor_custom_rules_path }}/{{ item.folder }}"
+      delegate_to: localhost
+      become: false
+      register: rules_dir
+      tags:
+        - reconfigure
+        - rules
+
+    - name: Remove old {{ item.folder }} Prometheus rules directory
+      file:
+        path: "/opt/prometheus/rules/{{ item.folder }}"
+        state: absent
+      tags:
+        - reconfigure
+        - rules
+
+    - name: Copy Prometheus rules
+      block:
+        - name: Create {{ item.folder }} Prometheus rules directory
+          file:
+            path: "/opt/prometheus/rules/{{ item.folder }}"
+            state: directory
+            mode: "0755"
+
+        - name: Copy {{ item.folder }} Prometheus rules
+          copy:
+            src: "{{ file_path }}"
+            dest: "/opt/prometheus/rules/{{ item.folder }}"
+            mode: "0755"
+          with_fileglob:
+            - "{{ monitor_custom_rules_path }}/{{ item.folder }}/*"
+          loop_control:
+            loop_var: file_path
+      when: rules_dir.stat.exists
+  tags:
+    - reconfigure
+    - rules

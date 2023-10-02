@@ -1,0 +1,23 @@
+{% if geo_secondary_is_multi_node %}
+patroni['standby_cluster']['enable'] = true
+patroni['standby_cluster']['host'] = '{{ internal_lb_host }}'
+patroni['standby_cluster']['port'] = 5432
+patroni['standby_cluster']['primary_slot_name'] = 'geo_secondary'
+patroni['replication_password'] = '{{ postgres_password }}'
+
+{% if patroni_password is defined %}
+patroni['username'] = 'patroni-api'
+patroni['password'] = '{{ patroni_password }}'
+{% endif %}
+{% else %}
+geo_secondary_role['enable'] = true
+{% if geo_primary_is_multi_node %}
+postgresql['max_wal_senders'] = {{ (((groups['postgres'] | length) * 2) * (geo_replication_slot_modifier | int)) + 1 }}
+{% endif %}
+{% endif %}
+gitlab_rails['geo_node_name'] = "{{ geo_secondary_site_name }}"
+
+gitlab_rails['db_password'] = "{{ postgres_password }}"
+postgresql['sql_replication_password'] = '{{ geo_sql_replication_password_md5 }}'
+postgresql['sql_user_password'] = "{{ (postgres_password + 'gitlab') | md5 }}"
+postgresql['listen_address'] = "0.0.0.0"

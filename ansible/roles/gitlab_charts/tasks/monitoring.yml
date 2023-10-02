@@ -1,0 +1,168 @@
+- name: Setup Consul agent
+  block:
+    - name: Add Consul repo
+      kubernetes.core.helm_repository:
+        name: hashicorp
+        repo_url: https://helm.releases.hashicorp.com
+
+    - name: Update Consul repo
+      command: helm repo update hashicorp
+
+    - name: Get all Consul chart versions
+      command: helm search repo hashicorp/consul -l -o json
+      register: consul_charts_versions
+
+    - name: Match Consul charts version to app version
+      set_fact:
+        consul_charts_version: "{{ (consul_charts_versions.stdout | from_json | selectattr('name', 'equalto', 'hashicorp/consul') | selectattr('app_version', 'equalto', consul_charts_app_version))[0].version | default('', true) }}"
+
+    - name: Fail if Consul charts version can't be found
+      fail:
+        msg: "Consul charts version for {{ consul_charts_app_version }} could not be found. Exiting..."
+      when: consul_charts_version == ''
+
+    - name: Show Consul charts version
+      debug:
+        msg: "Consul charts version for {{ consul_charts_app_version }} is {{ consul_charts_version }}"
+
+    - name: Install Consul chart
+      kubernetes.core.helm:
+        name: gitlab-consul
+        chart_ref: hashicorp/consul
+        chart_version: "{{ consul_charts_version }}"
+        release_namespace: "{{ consul_charts_namespace }}"
+        values:
+          global:
+            enabled: false
+            datacenter: gitlab_consul
+          client:
+            enabled: true
+            join: "{{ consul_int_addrs }}"
+            nodeSelector: |
+              workload: support
+
+    - name: Configure internal Consul endpoint
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: Service
+          metadata:
+            name: gitlab-consul
+            namespace: "{{ consul_charts_namespace }}"
+          spec:
+            type: ClusterIP
+            ports:
+              - port: 8500
+                protocol: TCP
+            selector:
+              app: consul
+              release: gitlab-consul
+  when: "'consul' in groups"
+
+- name: Setup kube-prometheus-stack chart
+  block:
+    - name: Add kube-prometheus-stack repo
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+
+    - name: Update kube-prometheus-stack repo
+      command: helm repo update prometheus-community
+
+    - name: Get existing kube-prometheus-stack deployment details
+      kubernetes.core.helm_info:
+        name: gitlab-kube-prometheus-stack
+        release_namespace: "{{ kube_prometheus_stack_charts_namespace }}"
+      register: kube_prometheus_stack_charts_existing_info
+
+    - name: Set existing kube-prometheus-stack app version
+      set_fact:
+        kube_prometheus_stack_charts_existing_app_version: "{{ kube_prometheus_stack_charts_existing_info.status.app_version }}"
+      when: kube_prometheus_stack_charts_existing_info.status is defined
+
+    - name: Update CRDs on existing kube-prometheus-stack deployment
+      shell: |
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_alertmanagerconfigs.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_alertmanagers.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_podmonitors.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_probes.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_prometheuses.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_prometheusrules.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
+        kubectl replace -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v{{ kube_prometheus_stack_charts_app_version | replace('v', '') }}/example/prometheus-operator-crd/monitoring.coreos.com_thanosrulers.yaml
+      when:
+        - kube_prometheus_stack_charts_existing_app_version is defined
+        - kube_prometheus_stack_charts_app_version != kube_prometheus_stack_charts_existing_app_version
+
+    - name: Delete old deprecated Node Exporter daemonset (<0.59.1)
+      command: kubectl delete daemonset -l app=prometheus-node-exporter
+      when:
+        - kube_prometheus_stack_charts_existing_app_version is defined
+        - (kube_prometheus_stack_charts_existing_app_version | replace('v', '')) is version('0.59.1', '<')
+        - kube_prometheus_stack_charts_app_version != kube_prometheus_stack_charts_existing_app_version
+
+    - name: Get all kube-prometheus-stack versions
+      command: helm search repo prometheus-community/kube-prometheus-stack -l -o json
+      register: kube_prometheus_stack_charts_versions
+
+    - name: Match kube-prometheus-stack charts version to app version
+      set_fact:
+        kube_prometheus_stack_charts_version: "{{ (kube_prometheus_stack_charts_versions.stdout | from_json | selectattr('name', 'equalto', 'prometheus-community/kube-prometheus-stack') | selectattr('app_version', 'equalto', kube_prometheus_stack_charts_app_version))[0].version | default('', true) }}"
+
+    - name: Fail if kube-prometheus-stack charts version can't be found
+      fail:
+        msg: "kube-prometheus-stack charts version for {{ kube_prometheus_stack_charts_app_version }} could not be found. Exiting..."
+      when: kube_prometheus_stack_charts_version == ''
+
+    - name: Show kube-prometheus-stack charts version
+      debug:
+        msg: "kube-prometheus-stack charts version for {{ kube_prometheus_stack_charts_app_version }} is {{ kube_prometheus_stack_charts_version }}"
+
+    - name: Lookup kube-prometheus-stack chart values values
+      set_fact:
+        kube_prometheus_stack_charts_values: "{{ lookup('template', 'templates/kube-prometheus-stack.yml.j2') | from_yaml }}"
+
+    - name: Check if custom kube-prometheus-stack chart values are provided
+      stat:
+        path: "{{ kube_prometheus_stack_charts_custom_config_file }}"
+      register: kube_custom_config_file
+
+    - name: Merge in custom kube-prometheus-stack chart values if provided
+      set_fact:
+        kube_prometheus_stack_charts_values: "{{ kube_prometheus_stack_charts_values | combine(lookup('template', kube_prometheus_stack_charts_custom_config_file) | from_yaml, recursive=True) }}"
+      when: kube_custom_config_file.stat.exists
+
+    - name: Show charts values if configured
+      debug:
+        msg: "{{ kube_prometheus_stack_charts_values }}"
+      when: gitlab_charts_show_values
+
+    - name: Install kube-prometheus-stack chart
+      kubernetes.core.helm:
+        name: gitlab-kube-prometheus-stack
+        chart_ref: prometheus-community/kube-prometheus-stack
+        chart_version: "{{ kube_prometheus_stack_charts_version }}"
+        release_namespace: "{{ kube_prometheus_stack_charts_namespace }}"
+        values: "{{ kube_prometheus_stack_charts_values }}"
+      register: kube_prometheus_stack_charts_deploy
+      retries: 3
+      delay: 3
+      until: kube_prometheus_stack_charts_deploy is success
+
+- name: Redeploy GitLab Charts to configure monitoring ServiceMonitors if first deploy
+  block:
+    - name: Wait until monitoring required cluster API is available
+      kubernetes.core.k8s_cluster_info:
+      register: cluster_api_status
+      until: cluster_api_status.apis['monitoring.coreos.com/v1'] is defined
+      retries: 12
+      delay: 5
+
+    - name: Redeploy GitLab Charts to configure monitoring ServiceMonitors if first deploy
+      kubernetes.core.helm:
+        name: gitlab
+        chart_ref: gitlab/gitlab
+        chart_version: "{{ gitlab_charts_version | default(None) }}"
+        release_namespace: "{{ gitlab_charts_release_namespace }}"
+        values: "{{ gitlab_charts_values }}"
+  when: kube_prometheus_stack_charts_existing_app_version is not defined

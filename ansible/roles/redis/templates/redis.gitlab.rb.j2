@@ -1,0 +1,65 @@
+{% if groups[redis_group_name] | count > 1 %}
+roles ['redis_sentinel_role', '{{ "redis_master_role" if (group_names | select("match", "redis.*_primary") | list | count == 1) else "redis_replica_role" }}']
+
+sentinel['bind'] = '0.0.0.0'
+sentinel['quorum'] = 2
+sentinel['use_hostnames'] = "{{ internal_addr_use_hostnames }}"
+{% else %}
+roles ["redis_master_role"]
+{% endif %}
+
+redis['bind'] = '0.0.0.0'
+
+{% if redis_group_name == 'redis_cache' %}
+redis['port'] = {{ redis_cache_port | int }}
+
+redis['password'] = '{{ redis_cache_password }}'
+redis['master_password'] = '{{ redis_cache_password }}'
+
+redis['master_name'] = 'gitlab-redis-cache'
+redis['master_ip'] = '{{ redis_cache_host }}'
+
+redis['maxmemory'] = '{{ ((ansible_memory_mb.real.total | int) * 0.9) | round | int }}mb'
+redis['maxmemory_policy'] = "allkeys-lru"
+redis['maxmemory_samples'] = 5
+{% elif redis_group_name == 'redis_persistent' %}
+redis['port'] = {{ redis_persistent_port | int }}
+
+redis['password'] = '{{ redis_persistent_password }}'
+redis['master_password'] = '{{ redis_persistent_password }}'
+
+redis['master_name'] = 'gitlab-redis-persistent'
+redis['master_ip'] = '{{ redis_persistent_host }}'
+{% else %}
+redis['port'] = {{ redis_port | int }}
+
+redis['password'] = '{{ redis_password }}'
+redis['master_password'] = '{{ redis_password }}'
+
+redis['master_name'] = 'gitlab-redis'
+redis['master_ip'] = '{{ redis_host }}'
+{% endif %}
+
+gitlab_rails['auto_migrate'] = false
+
+{% if 'consul' in groups %}
+# Consul Agent (Monitoring Auto Discovery)
+consul['enable'] = true
+consul['configuration'] = {
+  bind_addr: '{{ ansible_default_ipv4.address }}',
+  retry_join: %w({{ (consul_int_addrs | join(' ')) }})
+}
+consul['monitoring_service_discovery'] = true
+{% endif %}
+
+node_exporter['listen_address'] = '0.0.0.0:9100'
+redis_exporter['listen_address'] = '0.0.0.0:9121'
+redis_exporter['flags'] = {
+  'redis.addr' => "redis://localhost:{{ redis_port }}",
+  'redis.password' => '{{ redis_password }}'
+}
+
+custom_confs = Dir.glob(File.join("/etc/gitlab/", "gitlab.redis.*.rb"))
+custom_confs.each { |conf|
+  from_file conf
+}

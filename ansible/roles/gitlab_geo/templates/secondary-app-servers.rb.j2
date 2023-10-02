@@ -1,0 +1,19 @@
+{% if geo_secondary_is_multi_node %}
+gitlab_rails['geo_node_name'] = "{{ geo_secondary_site_name }}"
+gitlab_rails['auto_migrate'] = false
+
+{% if 'gitlab_rails' in group_names %}
+geo_logcursor['enable'] = true
+{% endif %}
+
+geo_secondary['enable'] = true
+geo_secondary['db_host'] = '{{ geo_tracking_postgres_host }}'
+geo_secondary['db_password'] = '{{ geo_tracking_postgres_password }}'
+geo_secondary['db_port'] = '{{ geo_tracking_postgres_port }}'
+geo_secondary['auto_migrate'] = false
+{% endif %}
+
+{% if container_registry_enable and container_registry_token is defined %}
+gitlab_rails['geo_registry_replication_enabled'] = true
+gitlab_rails['geo_registry_replication_primary_api_url'] = '{{ container_registry_external_url }}'
+{% endif %}

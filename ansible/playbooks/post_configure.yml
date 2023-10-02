@@ -1,0 +1,6 @@
+---
+- import_playbook: playbook_prep.yml
+
+- hosts: localhost
+  roles:
+    - post_configure

@@ -1,0 +1,57 @@
+- name: Failover Disable Primary - Enable Maintenance Mode
+  import_tasks: maintenance-mode.yml
+  vars:
+    maintenance_mode_state: true
+    site_group_name: "{{ geo_primary_site_group_name }}"
+    geo_site_prefix: "{{ geo_primary_site_prefix }}"
+    geo_site_gcp_project: "{{ geo_primary_site_gcp_project }}"
+    geo_site_gcp_zone: "{{ geo_primary_site_gcp_zone }}"
+    geo_site_aws_region: "{{ geo_primary_site_aws_region }}"
+  tags: maintenance-mode-enable
+
+- name: Failover Disable Primary - Disable Primary Site Omnibus nodes
+  block:
+    - name: Stop Primary Site
+      command: gitlab-ctl stop
+
+    - name: Disable GitLab service
+      service:
+        name: gitlab-runsvdir
+        enabled: false
+  when:
+    - omnibus_node
+    - (geo_primary_site_group_name in group_names)
+
+- name: Disable Primary Site for Cloud Native Hybrid environments
+  block:
+    - name: Failover Disable Primary - Configure kubeconfig credentials for Geo primary site
+      become: false
+      delegate_to: localhost
+      run_once: true
+      import_tasks: kubeconfig.yml
+      vars:
+        geo_site_prefix: "{{ geo_primary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_primary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_primary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_primary_site_aws_region }}"
+
+    - name: Failover Disable Primary - Disable Webservice pods
+      become: false
+      delegate_to: localhost
+      run_once: true
+      kubernetes.core.k8s_scale:
+        name: gitlab-webservice-default
+        kind: Deployment
+        namespace: "{{ gitlab_charts_release_namespace }}"
+        replicas: 0
+
+    - name: Failover Disable Primary - Disable Sidekiq pods
+      become: false
+      delegate_to: localhost
+      run_once: true
+      kubernetes.core.k8s_scale:
+        name: gitlab-sidekiq-all-in-1-v2
+        kind: Deployment
+        namespace: "{{ gitlab_charts_release_namespace }}"
+        replicas: 0
+  when: cloud_native_hybrid_geo

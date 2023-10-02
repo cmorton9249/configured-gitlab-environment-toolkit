@@ -1,0 +1,30 @@
+- name: Enable Object Storage Replication - Enable on all secondary sites for Omnibus environments
+  command: |
+    gitlab-rails runner "GeoNode.secondary_nodes.each { |n| n.update(sync_object_storage: true) }"
+  when:
+    - (geo_primary_site_group_name in group_names)
+    - ('gitlab_rails_primary' in group_names)
+
+- name: Enable Object Storage Replication for Cloud Native Hybrid environments
+  block:
+    - name: Enable Object Storage Replication - Configure kubeconfig credentials for Geo primary site
+      become: false
+      delegate_to: localhost
+      run_once: true
+      import_tasks: kubeconfig.yml
+      vars:
+        geo_site_prefix: "{{ geo_primary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_primary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_primary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_primary_site_aws_region }}"
+
+    - name: Enable Object Storage Replication - Enable on all secondary sites for Cloud Native Hybrid environments
+      become: false
+      delegate_to: localhost
+      run_once: true
+      kubernetes.core.k8s_exec:
+        pod: "{{ task_runner_pod }}"
+        namespace: "{{ gitlab_charts_release_namespace }}"
+        command: |
+          gitlab-rails runner "GeoNode.secondary_nodes.each { |n| n.update(sync_object_storage: true) }"
+  when: cloud_native_hybrid_geo

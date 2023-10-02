@@ -1,0 +1,38 @@
+---
+- name: Install certbot
+  package:
+    name: certbot
+    update_cache: true
+
+- name: Run certbot to generate certs
+  command:
+    cmd: certbot certonly -n --standalone --keep --agree-tos --email {{ external_ssl_letsencrypt_issuer_email }} --cert-name {{ external_host }} -d {{ external_host }}{{ ',' + container_registry_external_host if container_registry_enable else '' }}
+
+- name: Copy over HAProxy SSL files
+  copy:
+    src: "{{ item.hostfile }}"
+    dest: "{{ item.targetfile }}"
+    remote_src: true
+  loop:
+    - { hostfile: "/etc/letsencrypt/live/{{ external_host }}/fullchain.pem", targetfile: "/opt/haproxy/{{ external_host }}.pem" }
+    - { hostfile: "/etc/letsencrypt/live/{{ external_host }}/privkey.pem", targetfile: "/opt/haproxy/{{ external_host }}.pem.key" }
+
+- name: Setup certbot renew haproxy pre hook script
+  blockinfile:
+    path: /etc/letsencrypt/renewal-hooks/pre/haproxy.sh
+    block: |
+      #!/bin/sh
+      docker stop haproxy
+    create: true
+    mode: "0755"
+
+- name: Setup certbot renew haproxy post hook script
+  blockinfile:
+    path: /etc/letsencrypt/renewal-hooks/post/haproxy.sh
+    block: |
+      #!/bin/sh
+      cp -u /etc/letsencrypt/live/{{ external_host }}/fullchain.pem /opt/haproxy/{{ external_host }}.pem
+      cp -u /etc/letsencrypt/live/{{ external_host }}/privkey.pem /opt/haproxy/{{ external_host }}.pem.key
+      docker start haproxy
+    create: true
+    mode: "0755"

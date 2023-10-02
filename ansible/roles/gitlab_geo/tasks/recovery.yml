@@ -1,0 +1,99 @@
+- name: Enable Maintenance Mode
+  block:
+    - name: Recovery - Try to Enable Maintenance Mode on Primary Site
+      import_tasks: maintenance-mode.yml
+      vars:
+        maintenance_mode_state: true
+        site_group_name: "{{ geo_primary_site_group_name }}"
+        geo_site_prefix: "{{ geo_primary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_primary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_primary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_primary_site_aws_region }}"
+
+    - name: Recovery - Try to Enable Maintenance Mode on Secondary Site
+      import_tasks: maintenance-mode.yml
+      vars:
+        maintenance_mode_state: true
+        site_group_name: "{{ geo_secondary_site_group_name }}"
+        geo_site_prefix: "{{ geo_secondary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_secondary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_secondary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_secondary_site_aws_region }}"
+  tags:
+    - maintenance-mode-enable
+    - re-enable-primary
+
+- name: Re-enable Geo sites
+  block:
+    - name: Recovery - Re-enable Geo Primary Site
+      import_tasks: recovery-reenable-sites.yml
+      vars:
+        site_group_name: "{{ geo_primary_site_group_name }}"
+        geo_site_prefix: "{{ geo_primary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_primary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_primary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_primary_site_aws_region }}"
+
+    - name: Recovery - Re-enable Geo Secondary Site
+      import_tasks: recovery-reenable-sites.yml
+      vars:
+        site_group_name: "{{ geo_secondary_site_group_name }}"
+        geo_site_prefix: "{{ geo_secondary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_secondary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_secondary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_secondary_site_aws_region }}"
+  tags: re-enable-primary
+
+- name: Delete Geo config
+  block:
+    - name: Recovery - Find Geo config files
+      find:
+        paths: "/etc/gitlab"
+        recurse: true
+        patterns: "gitlab.geo.*.rb"
+      register: geo_config_files
+
+    - name: Recovery - Remove existing Geo config
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ geo_config_files.files }}"
+
+    - name: Recovery - Remove existing Geo role settings
+      file:
+        path: /etc/gitlab/gitlab-cluster.json
+        state: absent
+  when: omnibus_node
+
+- name: Recovery - Run GitLab Geo Recovery
+  vars:
+    geo_recovery: true
+  import_tasks: main.yml
+  tags: redeploy_secondary
+
+- name: Disable Maintenance mode after GitLab has restarted
+  block:
+    - name: Recovery - Wait for GitLab to be available
+      uri:
+        url: '{{ geo_primary_external_url }}/-/readiness'
+        validate_certs: false
+        timeout: 60
+      register: result
+      until: result.status == 200
+      retries: 20
+      delay: 5
+      become: false
+      delegate_to: localhost
+      run_once: true
+
+    - name: Recovery - Disable Maintenance Mode
+      import_tasks: maintenance-mode.yml
+      vars:
+        maintenance_mode_state: false
+        maintenance_mode_message: "GitLab is undergoing maintenance"
+        site_group_name: "{{ geo_primary_site_group_name }}"
+        geo_site_prefix: "{{ geo_primary_site_prefix }}"
+        geo_site_gcp_project: "{{ geo_primary_site_gcp_project }}"
+        geo_site_gcp_zone: "{{ geo_primary_site_gcp_zone }}"
+        geo_site_aws_region: "{{ geo_primary_site_aws_region }}"
+  tags: maintenance-mode-disable

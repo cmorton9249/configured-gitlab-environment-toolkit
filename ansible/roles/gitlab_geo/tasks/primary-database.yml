@@ -1,0 +1,46 @@
+- name: Primary Database - Add new settings
+  template:
+    src: templates/primary-database.rb.j2
+    dest: /etc/gitlab/gitlab.geo.primary-database.rb
+
+- name: Disable auto_migrate and re-enable for single node
+  block:
+    - name: Primary Database - Disable auto_migrate
+      vars:
+        db_migrate: false
+      blockinfile:
+        path: /etc/gitlab/gitlab.geo.primary-database.rb
+        block: "{{ lookup('template', '../templates/set-auto-migrate') }}"
+        marker: "# {mark} geo config block - auto-migrate"
+
+    - name: Primary Database - Run gitlab-ctl reconfigure
+      command: gitlab-ctl reconfigure
+
+    - name: Primary Database - Restart Postgres
+      command: gitlab-ctl restart
+
+    - name: Primary Database - Enable auto_migrate
+      vars:
+        db_migrate: true
+      blockinfile:
+        path: /etc/gitlab/gitlab.geo.primary-database.rb
+        block: "{{ lookup('template', '../templates/set-auto-migrate') }}"
+        marker: "# {mark} geo config block - auto-migrate"
+  when: ('gitlab_rails' in group_names and 'postgres_primary' not in groups)
+
+- name: Primary Database - Run gitlab-ctl reconfigure
+  command: gitlab-ctl reconfigure
+  register: result
+  retries: 2
+  delay: 10
+  until: result is success
+
+- name: Primary Database - Restart Postgres
+  command: gitlab-ctl restart
+
+- name: Primary Database - Fetch psql certificate
+  fetch:
+    src: ~gitlab-psql/data/server.crt
+    dest: "{{ geo_psql_temp_folder.path }}/"
+    flat: true
+  tags: secondary-database

@@ -1,0 +1,23 @@
+{% if not geo_primary_is_multi_node %}
+geo_primary_role['enable'] = true
+{% endif %}
+gitlab_rails['geo_node_name'] = "{{ geo_primary_site_name }}"
+
+{% if container_registry_enable and container_registry_token is defined %}
+registry['notifications'] = [
+  {
+    'name' => 'geo_event',
+    'url' => '{{ external_url_sanitised }}/api/v4/container_registry_event/events',
+    'timeout' => '500ms',
+    'threshold' => 5,
+    'backoff' => '1s',
+    'headers' => {
+      'Authorization' => ['{{ container_registry_token }}']
+    }
+  }
+]
+{% endif %}
+
+{% if container_registry_token is defined %}
+registry['notification_secret'] = "{{ container_registry_token }}"
+{% endif %}

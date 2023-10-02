@@ -1,0 +1,280 @@
+---
+- name: Configure kubeconfig credentials
+  import_tasks: kubeconfig.yml
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+    - kube-prometheus-stack
+    - kubeconfig
+
+- name: Setup Monitoring Namespaces if configured
+  kubernetes.core.k8s:
+    name: "{{ item }}"
+    kind: Namespace
+    state: present
+  loop:
+    - "{{ kube_prometheus_stack_charts_namespace }}"
+    - "{{ consul_charts_namespace }}"
+  when: cloud_native_hybrid_monitoring_setup
+
+- name: Configure chart secrets
+  import_tasks: secrets.yml
+  tags:
+    - reconfigure
+    - charts
+    - secrets
+
+- name: Run secrets chart tasks
+  block:
+    - name: Check if Secrets Chart tasks file exists
+      stat:
+        path: "{{ gitlab_charts_secrets_tasks_file }}"
+      register: gitlab_charts_secrets_tasks_file_path
+
+    - name: Run Secrets Chart tasks
+      include_tasks: "{{ gitlab_charts_secrets_tasks_file }}"
+      when: gitlab_charts_secrets_tasks_file_path.stat.exists
+  tags:
+    - reconfigure
+    - charts
+    - secrets
+
+- name: Run any Cloud Provider prep tasks
+  block:
+    - name: Run AWS EKS prep tasks
+      import_tasks: cloud_provider_prep/aws_eks.yml
+      when: cloud_provider == 'aws'
+  tags:
+    - reconfigure
+    - charts
+    - cloud_provider_prep
+
+- name: Gather facts for Omnibus Postgres cluster
+  block:
+    - name: Get latest Postgres Leader
+      command: gitlab-ctl get-postgresql-primary
+      register: postgres_leader_int_address
+      delegate_to: "{{ groups['postgres'][0] }}"
+      delegate_facts: true
+      become: true
+
+    - name: Set Postgres Leader IP and Port
+      set_fact:
+        postgres_host: "{{ postgres_leader_int_address.stdout.split(':')[0] }}"
+        postgres_port: "{{ postgres_leader_int_address.stdout.split(':')[1] }}"
+  when:
+    - "'postgres' in groups and groups['postgres'] | length > 1"
+    - not postgres_external
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+
+- name: Non Omnibus database related tasks
+  block:
+    - name: Create Database User
+      community.postgresql.postgresql_user:
+        login_host: "{{ postgres_host }}"
+        login_port: "{{ postgres_port }}"
+        login_user: "{{ postgres_admin_username }}"
+        login_password: "{{ postgres_admin_password }}"
+        db: "template1"
+        name: "{{ postgres_username.split('@')[0] }}"
+        password: "{{ postgres_password }}"
+        role_attr_flags: CREATEDB
+        expires: infinity
+
+    - name: Create Database
+      community.postgresql.postgresql_db:
+        login_host: "{{ postgres_host }}"
+        login_port: "{{ postgres_port }}"
+        login_user: "{{ postgres_username }}"
+        login_password: "{{ postgres_password }}"
+        name: "{{ postgres_database_name }}"
+        encoding: UTF-8
+
+    - name: Enable required Postgres extensions
+      community.postgresql.postgresql_ext:
+        login_host: "{{ postgres_host }}"
+        login_port: "{{ postgres_port }}"
+        login_user: "{{ postgres_admin_username }}"
+        login_password: "{{ postgres_admin_password }}"
+        name: "{{ item }}"
+        db: "{{ postgres_database_name }}"
+      loop: ['pg_trgm', 'btree_gist', 'plpgsql']
+  delegate_to: "{{ groups['gitaly'][0] }}"
+  delegate_facts: true
+  become: true
+  when:
+    - postgres_external
+    - postgres_external_prep
+    - cloud_native_hybrid_geo_role != 'secondary'
+  tags:
+    - reconfigure
+    - db_migrate
+    - postgres_external
+  run_once: true
+
+- name: Calculate Pod Counts based on Environment size
+  block:
+    - name: Gather Gitaly group facts
+      setup:
+        filter: ansible_processor_vcpus
+      register: result
+      retries: 3
+      delay: 2
+      until: result is success
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      with_items: "{{ groups['gitaly'] }}"
+
+    - name: Get Gitaly CPU count
+      set_fact:
+        gitaly_cpus: "{{ groups['gitaly'] | sort | map('extract', hostvars, ['ansible_processor_vcpus']) | list | sum }}"
+
+    - name: Set Pod Counts
+      set_fact:
+        # Calculate maximum pod count by matching Gitaly CPU count to RA sizes or best effort if no matches
+        webservice_replicas: "{{ webservice_default_replica_counts[gitaly_cpus] | default((gitaly_cpus | int / 2.4) | round | int, 'true') }}"
+        sidekiq_replicas: "{{ sidekiq_default_replica_counts[gitaly_cpus] | default(14 if gitaly_cpus | int >= 48 else (8 if gitaly_cpus | int >= 12 else 2), 'true') }}"
+
+    - name: Show calculated numbers for charts
+      debug:
+        msg: |
+          gitaly_cpus: {{ gitaly_cpus }}
+
+          webservice_requests_cpu: {{ gitlab_charts_webservice_requests_cpu }}
+          webservice_requests_memory_gb: {{ gitlab_charts_webservice_requests_memory_gb }}
+          webservice_limits_memory_gb: {{ gitlab_charts_webservice_limits_memory_gb }}
+
+          sidekiq_requests_cpu: {{ gitlab_charts_sidekiq_requests_cpu }}
+          sidekiq_requests_memory_gb: {{ gitlab_charts_sidekiq_requests_memory_gb }}
+          sidekiq_limits_memory_gb: {{ gitlab_charts_sidekiq_limits_memory_gb }}
+
+          webservice_replicas: {{ webservice_replicas }}
+          sidekiq_replicas: {{ sidekiq_replicas }}
+      when: gitlab_charts_show_values
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+    - kube-prometheus-stack
+
+- name: Add GitLab Charts repo
+  kubernetes.core.helm_repository:
+    name: "{{ gitlab_charts_repo_name }}"
+    repo_url: "{{ gitlab_charts_repo_url }}"
+  tags:
+    - reconfigure
+    - charts
+
+- name: Update GitLab Charts repo
+  command: "helm repo update {{ gitlab_charts_repo_name }}"
+  tags:
+    - reconfigure
+    - charts
+
+- name: Get GitLab Charts version if App version specified
+  # Helm doesn't allow installs by app_version - https://github.com/helm/helm/issues/8194
+  block:
+    - name: Get all GitLab Charts versions
+      command: helm search repo gitlab/gitlab -l -o json
+      register: gitlab_charts_versions
+
+    - name: Match GitLab Charts version to App version
+      set_fact:
+        gitlab_charts_version: "{{ (gitlab_charts_versions.stdout | from_json | selectattr('name', 'equalto', 'gitlab/gitlab') | selectattr('app_version', 'match', '^v?' + gitlab_version + '$'))[0].version | default('', true) }}"
+
+    - name: Fail if GitLab Charts version can't be found
+      fail:
+        msg: "Charts version for {{ gitlab_version }} could not be found. Exiting..."
+      when: gitlab_charts_version == ''
+
+    - name: Show GitLab Charts Version
+      debug:
+        msg: "Charts version for {{ gitlab_version }} is {{ gitlab_charts_version }}"
+  when: gitlab_version != ""
+  tags:
+    - reconfigure
+    - charts
+    - charts_version
+
+- name: Lookup GitLab Chart values
+  set_fact:
+    gitlab_charts_values: "{{ lookup('template', 'templates/gitlab.yml.j2') | from_yaml }}"
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+    - kube-prometheus-stack
+
+- name: Check if custom GitLab Chart values are provided
+  stat:
+    path: "{{ gitlab_charts_custom_config_file }}"
+  register: custom_config_file
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+    - kube-prometheus-stack
+
+- name: Merge in custom GitLab Chart values if provided
+  set_fact:
+    gitlab_charts_values: "{{ gitlab_charts_values | combine(lookup('template', gitlab_charts_custom_config_file) | from_yaml, recursive=True) }}"
+  when: custom_config_file.stat.exists
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+    - kube-prometheus-stack
+
+- name: Show charts values if configured
+  debug:
+    msg: "{{ gitlab_charts_values }}"
+  when: gitlab_charts_show_values
+  tags:
+    - reconfigure
+    - charts
+    - charts_values
+    - kube-prometheus-stack
+
+- name: Install GitLab Charts
+  kubernetes.core.helm:
+    name: gitlab
+    chart_ref: "{{ gitlab_charts_repo_name }}/gitlab"
+    chart_version: "{{ gitlab_charts_version | default(None) }}"
+    release_namespace: "{{ gitlab_charts_release_namespace }}"
+    values: "{{ gitlab_charts_values }}"
+  register: helm_install_result
+  failed_when:
+    - (helm_install_result.msg is defined and 'Failure when executing Helm command' in helm_install_result.msg) or
+      ('FAILED' in helm_install_result.stderr)
+  tags:
+    - reconfigure
+    - charts
+
+- name: Setup Monitoring Charts if configured
+  import_tasks: 'monitoring.yml'
+  when: cloud_native_hybrid_monitoring_setup
+  tags:
+    - reconfigure
+    - charts
+    - kube-prometheus-stack
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ gitlab_charts_custom_tasks_file }}"
+      register: gitlab_charts_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ gitlab_charts_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: gitlab_charts_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

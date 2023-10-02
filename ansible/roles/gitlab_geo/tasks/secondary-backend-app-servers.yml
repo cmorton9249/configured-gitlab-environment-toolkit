@@ -1,0 +1,12 @@
+- name: Secondary Backend App Servers - Add new config
+  template:
+    src: templates/secondary-app-servers.rb.j2
+    dest: /etc/gitlab/gitlab.geo.secondary-app-servers.rb
+
+- name: Secondary Backend App Servers - Run gitlab-ctl reconfigure
+  command: gitlab-ctl reconfigure
+  retries: 2
+  delay: 5
+
+- name: Secondary Backend App Servers - Run gitlab-ctl restart
+  command: gitlab-ctl restart

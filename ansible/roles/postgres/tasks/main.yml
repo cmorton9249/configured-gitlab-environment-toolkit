@@ -1,0 +1,119 @@
+---
+- name: Check if Patroni was setup previously
+  stat:
+    path: /var/log/gitlab/patroni/current
+  register: patroni_check
+
+- name: Setup GitLab config file
+  template:
+    src: templates/postgres.gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+  tags: reconfigure
+
+- name: Configure Custom Config
+  block:
+    - name: Check if custom config exists
+      stat:
+        path: "{{ postgres_custom_config_file }}"
+      delegate_to: localhost
+      become: false
+      register: postgres_custom_config_file_path
+
+    - name: Setup Custom Config
+      template:
+        src: "{{ postgres_custom_config_file }}"
+        dest: "/etc/gitlab/gitlab.postgres.custom.rb"
+        mode: "0644"
+      when: postgres_custom_config_file_path.stat.exists
+
+    - name: Remove old Custom Config if not configured
+      file:
+        path: "/etc/gitlab/gitlab.postgres.custom.rb"
+        state: absent
+      when: not postgres_custom_config_file_path.stat.exists
+  tags: reconfigure
+
+- name: Copy over any Custom Files
+  copy:
+    src: "{{ item.src_path }}"
+    dest: "{{ item.dest_path }}"
+    mode: "{{ item.mode if item.mode is defined else 'preserve' }}"
+  loop: "{{ postgres_custom_files_paths }}"
+  tags: reconfigure
+
+- name: Propagate Secrets if existing
+  include_role:
+    name: common
+    tasks_from: secrets
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Reconfigure PostgreSQL
+  command: gitlab-ctl reconfigure
+  register: result
+  retries: 3
+  until: result is success
+  tags: reconfigure
+
+- name: Propagate Secrets if new
+  include_role:
+    name: common
+    tasks_from: secrets
+  vars:
+    gitlab_secrets_reconfigure: true
+  when: gitlab_secrets_setup
+  tags:
+    - reconfigure
+    - secrets
+    - gitlab-secrets
+
+- name: Restart PostgreSQL
+  command: gitlab-ctl restart
+  register: result
+  retries: 2
+  until: result is success
+  tags:
+    - reconfigure
+    - restart
+
+- name: Show debug output of postgres cluster status
+  block:
+    - name: Debug capture output of 'gitlab-ctl patroni members'
+      shell: "gitlab-ctl patroni members 2>/dev/null"
+      register: patroni_members
+      ignore_errors: true
+
+    - name: Debug show output of 'gitlab-ctl patroni members'
+      debug:
+        msg: "{{ patroni_members.stdout }}"
+      when: patroni_members.stdout is defined
+  when: groups['postgres'] | length > 1
+  tags:
+    - debug
+    - reconfigure
+
+- name: Create skip-auto-reconfigure file
+  file:
+    path: /etc/gitlab/skip-auto-reconfigure
+    state: touch
+    mode: u=rw,g=r,o=r
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ postgres_custom_tasks_file }}"
+      register: postgres_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ postgres_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: postgres_custom_tasks_file_path.stat.exists
+  tags: custom_tasks

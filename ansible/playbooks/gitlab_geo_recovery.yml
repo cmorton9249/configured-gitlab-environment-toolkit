@@ -1,0 +1,12 @@
+---
+- hosts: all:!gitlab_*_node_pool:!ungrouped
+  become: true
+
+  roles:
+    - common_vars
+
+  tasks:
+    - name: Run GitLab Geo Recovery
+      import_role:
+        name: gitlab_geo
+        tasks_from: recovery

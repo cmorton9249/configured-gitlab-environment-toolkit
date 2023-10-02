@@ -1,0 +1,126 @@
+---
+- name: Configure Docker
+  include_role:
+    name: geerlingguy.docker
+  when: ansible_facts['distribution'] != "Amazon"
+
+- name: Configure Docker (RHEL - Amazon Linux 2)
+  shell: amazon-linux-extras install docker -y && systemctl enable docker && systemctl start docker
+  when: ansible_facts['distribution'] == "Amazon"
+
+- name: Configure Node exporter
+  vars:
+    node_exporter_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+  include_role:
+    name: geerlingguy.node_exporter
+
+- name: Stop HAProxy if running
+  docker_container:
+    name: haproxy
+    state: absent
+  tags: reconfigure
+
+- name: Create /opt/haproxy directory
+  file:
+    path: /opt/haproxy
+    state: directory
+  tags: reconfigure
+
+- name: Configure External SSL
+  block:
+    - name: Configure Let's Encrypt certificates
+      import_tasks: ssl/letsencrypt.yml
+      when:
+        - external_url_ssl
+        - external_ssl_source == 'letsencrypt'
+
+    - name: Configure User provided certificates
+      import_tasks: ssl/user.yml
+      when:
+        - external_url_ssl
+        - external_ssl_source == 'user'
+
+    - name: Cleanup any previous External SSL config if disabled
+      import_tasks: ssl/none.yml
+      when:
+        - not external_url_ssl
+        - "external_ssl_source == ''"
+  when: "'haproxy_external' in group_names"
+  tags: reconfigure
+
+- name: Create /opt/haproxy/haproxy.cfg file
+  template:
+    src: templates/haproxy.cfg.j2
+    dest: /opt/haproxy/haproxy.cfg
+  tags: reconfigure
+
+- name: Start HAProxy Internal Docker
+  docker_container:
+    name: haproxy
+    image: "{{ haproxy_docker_image }}"
+    pull: true
+    recreate: true
+    restart_policy: unless-stopped
+    state: started
+    ports: ['80:80', '6432:6432', '1936:1936', '5432:5432', "{{ (praefect_ssl_port + ':' + praefect_ssl_port) if praefect_ssl else '2305:2305' }}"]
+    volumes:
+      - /opt/haproxy:/usr/local/etc/haproxy:ro
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+  register: result
+  retries: 2
+  delay: 5
+  until: result is success
+  when: "'haproxy_internal' in group_names"
+  tags:
+    - reconfigure
+    - restart
+
+- name: Start HAProxy External Docker
+  docker_container:
+    name: haproxy
+    image: "{{ haproxy_docker_image }}"
+    pull: true
+    recreate: true
+    restart_policy: unless-stopped
+    state: started
+    ports: ['80:80', '443:443', '1936:1936', "{{ gitlab_shell_ssh_port }}:{{ gitlab_shell_ssh_port }}"]
+    volumes:
+      - /opt/haproxy:/usr/local/etc/haproxy:ro
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+  register: result
+  retries: 2
+  delay: 5
+  until: result is success
+  when: "'haproxy_external' in group_names"
+  tags:
+    - reconfigure
+    - restart
+
+- name: Wait for HAProxy Docker to be running
+  shell: docker inspect -f \{\{.State.Status\}\} haproxy
+  register: haproxy_docker_status
+  until: haproxy_docker_status.stdout == 'running'
+  retries: 10
+  delay: 2
+  tags:
+    - reconfigure
+    - restart
+
+- name: Run Custom Tasks
+  block:
+    - name: Check if Custom Tasks file exists
+      stat:
+        path: "{{ haproxy_custom_tasks_file }}"
+      register: haproxy_custom_tasks_file_path
+      delegate_to: localhost
+      become: false
+
+    - name: Run Custom Tasks
+      include_tasks:
+        file: "{{ haproxy_custom_tasks_file }}"
+        apply:
+          tags: custom_tasks
+      when: haproxy_custom_tasks_file_path.stat.exists
+  tags: custom_tasks
