@@ -31,7 +31,8 @@ module "gitlab_rails" {
   security_group_ids = flatten([
     aws_security_group.gitlab_internal_networking.id,
     try(aws_security_group.gitlab_external_ssh[0].id, null),
-    var.gitlab_rails_security_group_ids
+    var.gitlab_rails_security_group_ids,
+    try(aws_security_group.demo_traffic.id, null)
   ])
 
   geo_site       = var.geo_site

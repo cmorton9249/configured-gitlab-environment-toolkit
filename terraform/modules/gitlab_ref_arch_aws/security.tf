@@ -153,13 +153,13 @@ resource "aws_security_group" "gitlab_rds" {
   }
 }
 
-resource "aws_security_group" "staging_traffic" {
-  name_prefix = "${var.prefix}-staging-"
+resource "aws_security_group" "demo_traffic" {
+  name_prefix = "${var.prefix}-demo-"
   vpc_id      = data.aws_vpc.selected.id
-  description = "Allows staging traffic for demo"
+  description = "Allows traffic for demo"
 
   tags = {
-    Name = "${var.prefix}-staging"
+    Name = "${var.prefix}-demo"
   }
 
   lifecycle {
@@ -511,7 +511,7 @@ resource "aws_vpc_security_group_ingress_rule" "gitlab_opensearch_service_cidr" 
 }
 
 resource "aws_vpc_security_group_ingress_rule" "staging_traffic_ingress_rule" {
-  security_group_id = aws_security_group.staging_traffic.id
+  security_group_id = aws_security_group.demo_traffic.id
 
   description = "Allow Staging Traffic"
   to_port     = 9000
@@ -521,5 +521,19 @@ resource "aws_vpc_security_group_ingress_rule" "staging_traffic_ingress_rule" {
   cidr_ipv4 = "173.88.161.156/32"
   tags = {
     Name = "${var.prefix}-staging"
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "prod_traffic_ingress_rule" {
+  security_group_id = aws_security_group.demo_traffic.id
+
+  description = "Allow Prod Traffic"
+  to_port     = 5000
+  from_port   = 5000
+  ip_protocol = "tcp"
+
+  cidr_ipv4 = "173.88.161.156/32"
+  tags = {
+    Name = "${var.prefix}-prod"
   }
 }
