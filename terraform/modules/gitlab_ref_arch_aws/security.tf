@@ -518,7 +518,7 @@ resource "aws_vpc_security_group_ingress_rule" "staging_traffic_ingress_rule" {
   from_port   = 9000
   ip_protocol = "tcp"
 
-  cidr_ipv4 = "173.88.161.156/32"
+  cidr_ipv4 = "0.0.0.0/0"
   tags = {
     Name = "${var.prefix}-staging"
   }
@@ -532,7 +532,7 @@ resource "aws_vpc_security_group_ingress_rule" "prod_traffic_ingress_rule" {
   from_port   = 5000
   ip_protocol = "tcp"
 
-  cidr_ipv4 = "173.88.161.156/32"
+  cidr_ipv4 = "0.0.0.0/0"
   tags = {
     Name = "${var.prefix}-prod"
   }
